@@ -1,0 +1,46 @@
+:root {
+  --bg: #121826;
+  --text: #f4ecd8;
+  --sub: #9aa4b8;
+  --accent: #ffd23f;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: manipulation;
+}
+
+#root {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+}
+
+.title-screen {
+  text-align: center;
+}
+
+.title-screen h1 {
+  margin: 0 0 8px;
+  font-size: 40px;
+  font-weight: 900;
+  color: var(--accent);
+  letter-spacing: 1px;
+}
+
+.title-screen p {
+  margin: 4px 0;
+  color: var(--sub);
+}
