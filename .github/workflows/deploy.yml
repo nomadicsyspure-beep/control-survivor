@@ -1,0 +1,89 @@
+name: Deploy to GitHub Pages
+
+# main에 푸시되면 빌드해서, 완성된 파일만 gh-pages 브랜치에 올린다.
+# Pages 설정: Source = Deploy from a branch, Branch = gh-pages / (root)
+#
+# GitHub이 gh-pages를 받아 게시하는 단계(pages build and deployment)는 가끔 바로 전 배포를
+# '진행 중'으로 붙잡아 두고 새 배포를 거절한다 ("due to in progress deployment").
+# 그래서 올리기 전에 지금 gh-pages 커밋의 배포를 취소하고, 올린 뒤엔 게시가 끝났는지 확인해서
+# 실패면 취소 후 다시 게시를 요청한다.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  deployments: read
+  actions: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Cancel stuck Pages deployment of current gh-pages
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          prev=$(git ls-remote origin refs/heads/gh-pages | cut -f1)
+          if [ -n "$prev" ]; then
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/pages/deployments/${prev}/cancel" >/dev/null 2>&1 \
+              && echo "cancelled deployment of ${prev}" || echo "nothing to cancel for ${prev}"
+          fi
+      - name: Publish dist to gh-pages branch
+        working-directory: dist
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          touch .nojekyll
+          git init -q -b gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Deploy ${GITHUB_SHA::7}"
+          git push -f "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" gh-pages
+      - name: Make sure Pages actually published this build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          want=$(git ls-remote origin refs/heads/gh-pages | cut -f1)
+          repo="${GITHUB_REPOSITORY}"
+          echo "waiting for Pages to publish ${want}"
+          retries=0
+          for i in $(seq 1 40); do
+            sleep 15
+            # 이 커밋을 게시하는 GitHub 쪽 실행(pages build and deployment)의 가장 최근 결과
+            read -r status conclusion <<< "$(gh api "repos/${repo}/actions/runs?branch=gh-pages&head_sha=${want}&per_page=1" \
+              --jq '.workflow_runs[0] | (.status // "none") + " " + (.conclusion // "-")' 2>/dev/null || echo 'none -')"
+            echo "try ${i}: ${status} ${conclusion}"
+            if [ "$status" = "completed" ] && [ "$conclusion" = "success" ]; then
+              echo "published"; exit 0
+            fi
+            # 이 커밋의 게시가 거절됐을 때만: 붙잡힌 이전 배포를 취소하고 한 번 더 게시 요청 (최대 2번)
+            if [ "$status" = "completed" ] && [ "$conclusion" != "success" ] && [ "$conclusion" != "cancelled" ]; then
+              if [ "$retries" -ge 2 ]; then break; fi
+              retries=$((retries + 1))
+              for sha in $(gh api "repos/${repo}/deployments?environment=github-pages&per_page=5" --jq '.[].sha' 2>/dev/null); do
+                [ "$sha" = "$want" ] && continue
+                gh api -X POST "repos/${repo}/pages/deployments/${sha}/cancel" >/dev/null 2>&1 && echo "cancelled ${sha}"
+              done
+              sleep 5
+              gh api -X POST "repos/${repo}/pages/builds" >/dev/null 2>&1 && echo "requested a new Pages build (retry ${retries})"
+              sleep 30
+            fi
+          done
+          echo "::error::Pages did not publish ${want}"
+          exit 1
