@@ -297,3 +297,53 @@ button {
   width: 100%;
   accent-color: var(--accent);
 }
+
+/* 두 손 모드: 스킬 버튼 (공격 버튼 둘레) */
+.action-pad {
+  width: 230px;
+  height: 250px;
+}
+
+.act-skill {
+  width: 54px;
+  height: 54px;
+  font-size: 12px;
+  background:
+    linear-gradient(to top, rgba(0, 0, 0, 0.55) calc(var(--cd, 0) * 100%), transparent 0),
+    rgba(60, 80, 130, 0.6);
+}
+
+.act-skill.ready {
+  border-color: var(--accent);
+}
+
+.act-spin {
+  right: 96px;
+  bottom: 96px;
+}
+
+.act-rush {
+  right: 160px;
+  bottom: 84px;
+}
+
+.act-slam {
+  right: 100px;
+  bottom: 158px;
+}
+
+.act-ult {
+  right: 18px;
+  bottom: 176px;
+  width: 64px;
+  height: 64px;
+  font-size: 14px;
+  background:
+    linear-gradient(to top, rgba(0, 0, 0, 0.6) calc(var(--cd, 0) * 100%), transparent 0),
+    rgba(214, 64, 46, 0.7);
+}
+
+.act-wave {
+  bottom: 104px;
+  right: 18px;
+}
