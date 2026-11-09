@@ -1,14 +1,107 @@
 import './style.css';
+import { Game, type GameResult, type PlayMode } from './game';
+import { loadTuning, openSettings } from './settings';
+import { unlockAudio } from './sfx';
 
-// 컨트롤뱀서 시작판: 지금은 제목 화면만. 기획이 정해지면 여기서부터 만든다.
+// 컨트롤뱀서: 손맛 시험장.
+// 한 손 모드(기본) = 이동만, 펀치·장풍 자동. 두 손 모드(테스트) = 공격·회피·장풍 버튼.
+
 const root = document.getElementById('root')!;
-const screen = document.createElement('div');
-screen.className = 'title-screen';
-const title = document.createElement('h1');
-title.textContent = '컨트롤뱀서';
-const sub = document.createElement('p');
-sub.textContent = '준비 중';
-const build = document.createElement('p');
-build.textContent = `빌드 ${new Date(__BUILD_TIME__).toLocaleString('ko-KR')}`;
-screen.append(title, sub, build);
-root.append(screen);
+const tuning = loadTuning();
+let game: Game | null = null;
+
+const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', text = '') => {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text) e.textContent = text;
+  return e;
+};
+
+window.addEventListener('pointerdown', () => unlockAudio(), { once: true });
+
+function showTitle() {
+  game?.destroy();
+  game = null;
+  root.className = 'title-root';
+  root.replaceChildren();
+  const box = el('div', 'title-screen');
+  const one = el('button', 'btn primary big', '한 손 모드');
+  one.append(el('small', '', '이동만 · 펀치와 장풍은 자동'));
+  const two = el('button', 'btn big', '두 손 모드 (테스트)');
+  two.append(el('small', '', '왼손 이동 · 오른손 공격 · 회피 · 장풍'));
+  one.addEventListener('click', () => startGame('one'));
+  two.addEventListener('click', () => startGame('two'));
+  const set = el('button', 'btn', '⚙️ 설정');
+  set.addEventListener('click', () => openSettings(tuning, () => {}));
+  box.append(
+    el('h1', '', '컨트롤뱀서'),
+    el('p', 'sub', '손맛 시험장'),
+    one,
+    two,
+    set,
+    el('p', 'build', `빌드 ${new Date(__BUILD_TIME__).toLocaleString('ko-KR')}`),
+  );
+  root.append(box);
+}
+
+function startGame(mode: PlayMode) {
+  root.className = 'game-root';
+  root.replaceChildren();
+  game = new Game(root, mode, tuning, showResult);
+  const g = game;
+  // 위: 일시정지(설정)
+  const pause = el('button', 'icon-btn pause-btn', '⏸');
+  pause.addEventListener('click', () => {
+    g.paused = true;
+    g.joy.release();
+    openSettings(tuning, () => {
+      g.paused = false;
+    });
+  });
+  const quit = el('button', 'icon-btn quit-btn', '✕');
+  quit.addEventListener('click', () => showTitle());
+  root.append(pause, quit);
+  // 두 손 모드: 오른손 버튼
+  if (mode === 'two') {
+    const pad = el('div', 'action-pad');
+    const btn = (cls: string, label: string, key: 'attack' | 'dash' | 'wave') => {
+      const b = el('button', `act ${cls}`, label);
+      b.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        g.press[key] = true;
+      });
+      return b;
+    };
+    pad.append(btn('act-wave', '장풍', 'wave'), btn('act-dash', '회피', 'dash'), btn('act-atk', '공격', 'attack'));
+    root.append(pad);
+  }
+  game.start();
+}
+
+function showResult(r: GameResult) {
+  const overlay = el('div', 'overlay');
+  const modal = el('div', 'modal');
+  const again = el('button', 'btn primary', '다시 하기');
+  const home = el('button', 'btn', '처음으로');
+  const mode = game?.mode ?? 'one';
+  again.addEventListener('click', () => {
+    overlay.remove();
+    startGame(mode);
+  });
+  home.addEventListener('click', () => {
+    overlay.remove();
+    showTitle();
+  });
+  const sec = Math.floor(r.time);
+  modal.append(
+    el('div', 'modal-title', '쓰러졌다…'),
+    el('p', 'result-line', `WAVE ${r.wave} · 처치 ${r.kills}`),
+    el('p', 'result-line', `최고 연타 ${r.bestCombo} HIT · ${Math.floor(sec / 60)}분 ${sec % 60}초`),
+    again,
+    home,
+  );
+  overlay.append(modal);
+  document.body.append(overlay);
+}
+
+showTitle();
