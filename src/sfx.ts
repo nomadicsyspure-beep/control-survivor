@@ -92,6 +92,19 @@ export const sfx = {
     if (!throttle('kill', 30)) return;
     tone(660, 0.07, 'triangle', 0.12, 990);
   },
+  slam() {
+    tone(90, 0.35, 'sine', 0.8, 35);
+    noise(0.3, 0.5, 400, 0.7);
+  },
+  ultCharge() {
+    tone(220, 0.5, 'sawtooth', 0.12, 880);
+    noise(0.4, 0.15, 3000, 0.4);
+  },
+  ultBoom() {
+    tone(70, 0.6, 'sine', 0.9, 28);
+    noise(0.5, 0.6, 600, 0.6);
+    tone(1200, 0.3, 'triangle', 0.15, 300);
+  },
   perfect() {
     tone(880, 0.25, 'sine', 0.25, 1760);
   },

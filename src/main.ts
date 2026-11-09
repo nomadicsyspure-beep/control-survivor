@@ -1,5 +1,5 @@
 import './style.css';
-import { Game, type GameResult, type PlayMode } from './game';
+import { Game, SKILLS, type GameResult, type PlayMode, type SkillId } from './game';
 import { loadTuning, openSettings } from './settings';
 import { unlockAudio } from './sfx';
 
@@ -64,7 +64,7 @@ function startGame(mode: PlayMode) {
   // 두 손 모드: 오른손 버튼
   if (mode === 'two') {
     const pad = el('div', 'action-pad');
-    const btn = (cls: string, label: string, key: 'attack' | 'dash' | 'wave') => {
+    const btn = (cls: string, label: string, key: 'attack' | 'dash' | 'wave' | SkillId) => {
       const b = el('button', `act ${cls}`, label);
       b.addEventListener('pointerdown', (e) => {
         e.preventDefault();
@@ -73,7 +73,23 @@ function startGame(mode: PlayMode) {
       return b;
     };
     pad.append(btn('act-wave', '장풍', 'wave'), btn('act-dash', '회피', 'dash'), btn('act-atk', '공격', 'attack'));
+    // 스킬 버튼 (쿨타임이 돌면 아래부터 차오른다)
+    const skillBtns = (['spin', 'rush', 'slam', 'ult'] as SkillId[]).map((id) => {
+      const b = btn(`act-skill act-${id}`, SKILLS[id].short, id);
+      pad.append(b);
+      return { id, b };
+    });
     root.append(pad);
+    const tick = () => {
+      if (!g.running) return;
+      for (const { id, b } of skillBtns) {
+        const k = g.cdRatio(id);
+        b.style.setProperty('--cd', String(k));
+        b.classList.toggle('ready', k <= 0);
+      }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
   }
   game.start();
 }

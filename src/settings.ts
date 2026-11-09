@@ -2,7 +2,17 @@ import { ACTIONS, CELL, DIR_NAMES, drawFrame, loadSheet, type HeroAction } from 
 
 // 설정: 손맛 수치(히트스톱·화면 흔들림·밀려남)와 캐릭터 보기. 수치는 이 기기에 저장한다.
 
+/** 필살기 연출: 컷인 · 줌인 · 영역 전개 · 암전 · 없음 · 랜덤(돌아가며) */
+export type UltStyle = 'cutin' | 'zoom' | 'domain' | 'blackout' | 'none' | 'random';
+export const ULT_STYLES: [UltStyle, string][] = [
+  ['cutin', '컷인'], ['zoom', '줌인'], ['domain', '영역 전개'], ['blackout', '암전'], ['none', '없음'], ['random', '돌아가며'],
+];
+
 export interface Tuning {
+  /** 필살기 연출 */
+  ultStyle: UltStyle;
+  /** 테스트: 스킬·필살기 쿨타임 없애기 */
+  noCd: boolean;
   /** 맞힌 순간 멈춤 배율 */
   hitstop: number;
   /** 화면 흔들림 배율 */
@@ -12,7 +22,7 @@ export interface Tuning {
 }
 
 const KEY = 'control-survivor.settings.v1';
-export const DEFAULT_TUNING: Tuning = { hitstop: 1, shake: 1, knock: 1 };
+export const DEFAULT_TUNING: Tuning = { ultStyle: 'cutin', noCd: false, hitstop: 1, shake: 1, knock: 1 };
 
 export function loadTuning(): Tuning {
   try {
@@ -150,6 +160,26 @@ export function openSettings(tuning: Tuning, onClose: () => void) {
       saveTuning(tuning);
     }),
   );
+  // 필살기 연출 고르기 + 쿨타임 없애기 (테스트)
+  const ult = el('div', 'tune');
+  const chips = el('div', 'viewer-acts');
+  for (const [id, name] of ULT_STYLES) {
+    const b = el('button', 'chip' + (tuning.ultStyle === id ? ' on' : ''), name);
+    b.addEventListener('click', () => {
+      tuning.ultStyle = id;
+      saveTuning(tuning);
+      for (const x of chips.children) x.classList.toggle('on', x === b);
+    });
+    chips.append(b);
+  }
+  const noCd = el('button', 'chip' + (tuning.noCd ? ' on' : ''), `쿨타임 없애기 (테스트): ${tuning.noCd ? 'ON' : 'OFF'}`);
+  noCd.addEventListener('click', () => {
+    tuning.noCd = !tuning.noCd;
+    saveTuning(tuning);
+    noCd.classList.toggle('on', tuning.noCd);
+    noCd.textContent = `쿨타임 없애기 (테스트): ${tuning.noCd ? 'ON' : 'OFF'}`;
+  });
+  ult.append(el('div', 'section-title', '필살기 연출 (백열권)'), chips, noCd);
   const close = el('button', 'btn primary', '닫기');
   const done = () => {
     viewer.stop();
@@ -157,7 +187,7 @@ export function openSettings(tuning: Tuning, onClose: () => void) {
     onClose();
   };
   close.addEventListener('click', done);
-  modal.append(el('div', 'modal-title', '⚙️ 설정'), el('div', 'section-title', '캐릭터'), viewer.box, tune, close);
+  modal.append(el('div', 'modal-title', '⚙️ 설정'), el('div', 'section-title', '캐릭터'), viewer.box, ult, tune, close);
   overlay.append(modal);
   document.body.append(overlay);
 }
