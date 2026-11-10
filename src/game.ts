@@ -9,7 +9,8 @@ import { DIFFS, atkMul, hpMul, skillCdMul, skillDmgMul, type Save } from './save
 // 한 손 모드: 이동만 — 펀치 콤보와 장풍은 자동. 두 손 모드(테스트): 공격·회피·장풍 버튼.
 // 타격감: 히트스톱 · 화면 흔들림 · 하얀 번쩍임 · 밀려남 · 경직 · 찌그러짐 · 불꽃 · 마무리 타는 속도선과 화면 당김.
 
-export type PlayMode = 'one' | 'two' | 'gesture';
+/** 조작: one 한 손 자동 · two 두 손 버튼 · gesture 제스처 · pilot 자동 이동 + 스킬 버튼 */
+export type PlayMode = 'one' | 'two' | 'gesture' | 'pilot';
 /** 판 종류: 도파민(3분 동안 몰려오는 몹 쓸어 담기) / 도전(웨이브 + 5웨이브마다 보스, 난이도) */
 export type RunKind = 'horde' | 'challenge';
 export interface GameOpts {
@@ -451,6 +452,97 @@ export class Game {
     }, 1200);
   }
 
+  /** 자동 이동의 지금 방향 (부드럽게 꺾는다) */
+  private amx = 0;
+  private amy = 0;
+
+  /**
+   * 자동 이동: 가까운 몹에게 붙어서 때리고(보스·골렘에겐 조금 거리를 두고),
+   * 나에게 날아오는 탄·빨간 길·몹 떼 한가운데는 피한다. 서툰 사람 정도로
+   */
+  private autoMove(dt: number) {
+    const p = this.p;
+    let ax = 0;
+    let ay = 0;
+    const t = this.nearest(600);
+    if (t) {
+      const dx = t.x - p.x;
+      const dy = t.y - p.y;
+      const d = Math.hypot(dx, dy) || 1;
+      const want = t.kind === 'boss' ? t.r + 50 : t.r + STEPS[0].reach * 0.6;
+      const k = d > want + 8 ? 1 : d < want - 12 ? -0.6 : 0;
+      ax += (dx / d) * k;
+      ay += (dy / d) * k;
+      // 붙어 있을 땐 살짝 옆으로 돌며
+      if (k === 0) {
+        ax += (-dy / d) * 0.25;
+        ay += (dx / d) * 0.25;
+      }
+    }
+    // 몹 떼 한가운데는 피한다 (가까이 많으면 바깥쪽으로)
+    let cx = 0;
+    let cy = 0;
+    let n = 0;
+    for (const e of this.enemies) {
+      if (e.dead) continue;
+      const d = Math.hypot(e.x - p.x, e.y - p.y);
+      if (d < 70) {
+        cx += e.x;
+        cy += e.y;
+        n++;
+      }
+      // 기 모으는 골렘·돌진 중인 적은 비킨다
+      if ((e.cast > 0 || e.dashT > 0) && e.kind !== 'slime' && d < 160) {
+        ax += ((p.x - e.x) / (d || 1)) * 1.2;
+        ay += ((p.y - e.y) / (d || 1)) * 1.2;
+      }
+    }
+    if (n >= 6) {
+      const ox = p.x - cx / n;
+      const oy = p.y - cy / n;
+      const od = Math.hypot(ox, oy) || 1;
+      ax += (ox / od) * 0.8;
+      ay += (oy / od) * 0.8;
+    }
+    // 날아오는 탄: 탄 길 옆으로
+    for (const b of this.bullets) {
+      const rx = p.x - b.x;
+      const ry = p.y - 16 - b.y;
+      const d = Math.hypot(rx, ry);
+      if (d > 130 || d < 1) continue;
+      const sp = Math.hypot(b.vx, b.vy) || 1;
+      const ux = b.vx / sp;
+      const uy = b.vy / sp;
+      if (rx * ux + ry * uy < 0) continue;
+      const side = rx * -uy + ry * ux;
+      if (Math.abs(side) > 28) continue;
+      const sgn = side >= 0 ? 1 : -1;
+      const k = ((130 - d) / 130) * 2.5;
+      ax += -uy * sgn * k;
+      ay += ux * sgn * k;
+    }
+    // 빨간 길(돌진 예고): 길 밖으로
+    for (const l of this.lanes) {
+      const lx = l.x2 - l.x1;
+      const ly = l.y2 - l.y1;
+      const ll = Math.hypot(lx, ly) || 1;
+      const along = ((p.x - l.x1) * lx + (p.y - l.y1) * ly) / ll;
+      if (along < -20 || along > ll + 20) continue;
+      const side = ((p.x - l.x1) * -ly + (p.y - l.y1) * lx) / ll;
+      if (Math.abs(side) > l.w / 2 + 18) continue;
+      const sgn = side >= 0 ? 1 : -1;
+      ax += (-ly / ll) * sgn * 3;
+      ay += (lx / ll) * sgn * 3;
+    }
+    const k = 1 - Math.exp(-8 * dt);
+    this.amx += (ax - this.amx) * k;
+    this.amy += (ay - this.amy) * k;
+    const l = Math.hypot(this.amx, this.amy);
+    if (l < 0.08) return { x: 0, y: 0 };
+    const m = Math.min(1, l);
+    return { x: (this.amx / l) * m, y: (this.amy / l) * m };
+  }
+
   private nearest(range: number) {
     let best: Enemy | null = null;
     let bd = range;
@@ -475,22 +567,25 @@ export class Game {
     this.waveCd -= dt;
     this.dashCd -= dt;
     for (const id of SKILL_IDS) this.cds[id] = this.tuning.noCd ? 0 : this.cds[id] - dt;
-    const mv = this.joy.move;
+    // 자동 이동 (pilot): 화면을 끌면 그동안은 직접
+    const mv = this.mode === 'pilot' && !this.joy.active && !this.joy.keyMoving ? this.autoMove(dt) : this.joy.move;
     const ml = Math.hypot(mv.x, mv.y);
     p.moving = ml;
 
     // 두 손 모드 버튼 (키보드 J·K·L도)
     const two = this.mode === 'two';
+    /** 스킬을 버튼으로 쓰는 조작 (두 손 · 자동 이동) */
+    const manual = two || this.mode === 'pilot';
     const wantAtk = two && (this.press.attack || this.joy.pressed('j'));
-    const wantDash = two && (this.press.dash || this.joy.pressed('k'));
+    const wantDash = manual && (this.press.dash || this.joy.pressed('k'));
     const wantWave = two && (this.press.wave || this.joy.pressed('l'));
     const wantSkill: Record<SkillId, boolean> = {
-      spin: two && (this.press.spin || this.joy.pressed('u')),
-      rush: two && (this.press.rush || this.joy.pressed('i')),
+      spin: manual && (this.press.spin || this.joy.pressed('u')),
+      rush: manual && (this.press.rush || this.joy.pressed('i')),
       spindash: false,
       spinwave: false,
-      slam: two && (this.press.slam || this.joy.pressed('o')),
-      ult: two && (this.press.ult || this.joy.pressed(' ')),
+      slam: manual && (this.press.slam || this.joy.pressed('o')),
+      ult: manual && (this.press.ult || this.joy.pressed(' ')),
     };
     this.press.attack = this.press.dash = this.press.wave = false;
     this.press.spin = this.press.rush = this.press.slam = this.press.ult = false;
@@ -519,15 +614,21 @@ export class Game {
       // 스킬 발동: 두 손 = 버튼, 한 손 = 조건이 맞으면 자동 (필살기 → 지진 → 회오리 → 어퍼 순)
       for (const id of ['ult', 'slam', 'spin', 'rush'] as SkillId[]) {
         if (this.cds[id] > 0 || this.dashT > 0) continue;
-        if (two ? wantSkill[id] : this.autoSkill(id)) {
+        if (manual ? wantSkill[id] : this.autoSkill(id)) {
           this.startCast(id);
           return;
         }
       }
     }
 
+    // 회피: 자동 이동 모드는 슬라이딩 (가는 쪽으로)
+    if (wantDash && this.mode === 'pilot' && this.dashCd <= 0 && this.dashT <= 0) {
+      this.dashCd = DASH_CD;
+      const l = ml > 0.1 ? ml : 1;
+      this.startSlide(ml > 0.1 ? mv.x / l : p.fx, ml > 0.1 ? mv.y / l : p.fy);
+    }
     // 회피 (두 손 모드)
-    if (wantDash && this.dashCd <= 0 && this.dashT <= 0) {
+    if (wantDash && two && this.dashCd <= 0 && this.dashT <= 0) {
       const l = ml > 0.1 ? ml : 1;
       this.dashX = ml > 0.1 ? mv.x / l : p.fx;
       this.dashY = ml > 0.1 ? mv.y / l : p.fy;
@@ -609,7 +710,7 @@ export class Game {
     // 장풍: 한 손 = 조금 먼 적에게 가끔 자동, 두 손 = 버튼
     if (this.waveCd <= 0) {
       const far = this.nearest(380);
-      const autoGo = this.mode === 'one' && far && Math.hypot(far.x - p.x, far.y - p.y) > 110;
+      const autoGo = (this.mode === 'one' || this.mode === 'pilot') && far && Math.hypot(far.x - p.x, far.y - p.y) > 110;
       if (autoGo || wantWave) {
         this.waveCd = two ? WAVE_CD_MANUAL : WAVE_CD_AUTO;
         let ax = p.fx;
@@ -1917,7 +2018,7 @@ export class Game {
       const left = Math.max(0, Math.ceil(HORDE_SEC - this.time));
       ctx.fillText(`도파민 · 남은 ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')} · 처치 ${this.kills}`, 12, top + 32);
     } else {
-      const ctrl = this.mode === 'two' ? ' · 두 손' : this.mode === 'gesture' ? ' · 제스처' : ' · 자동';
+      const ctrl = this.mode === 'two' ? ' · 두 손' : this.mode === 'gesture' ? ' · 제스처' : this.mode === 'pilot' ? ' · 자동 이동' : ' · 자동';
       ctx.fillText(`도전 ${DIFFS[this.diff].name} · WAVE ${this.wave} · 처치 ${this.kills}${ctrl}`, 12, top + 32);
     }
     ctx.fillStyle = '#ffd23f';
@@ -1944,7 +2045,7 @@ export class Game {
       ctx.globalAlpha = 1;
     }
     // 스킬 쿨타임 (한 손 모드: 아래 가운데에 작은 원)
-    if (this.mode !== 'two') {
+    if (this.mode === 'one' || this.mode === 'gesture') {
       const list = HUD_SKILLS[this.mode === 'gesture' ? 'gesture' : 'one'];
       const n = list.length;
       const gap = 52;

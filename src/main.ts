@@ -80,6 +80,9 @@ function showChallenge() {
   const auto = el('button', 'btn primary', '자동 (한 손)');
   auto.append(el('small', '', '이동만 · 펀치·스킬 자동 (자동으로도 진행돼요)'));
   auto.addEventListener('click', () => go('one'));
+  const pilot = el('button', 'btn', '자동 이동 + 스킬 버튼');
+  pilot.append(el('small', '', '알아서 쫓아가 때리고 탄도 조금 피함 · 스킬·회피만 버튼 (끌면 그동안 직접 이동)'));
+  pilot.addEventListener('click', () => go('pilot'));
   const ges = el('button', 'btn', '제스처 (한 손)');
   ges.append(el('small', '', '톡 회오리 · 휙 슬라이딩 · 이어 붙이면 연계 (잘하면 더 빨리·더 많이)'));
   ges.addEventListener('click', () => go('gesture'));
@@ -94,6 +97,7 @@ function showChallenge() {
     chips,
     el('div', 'section-title', '조작'),
     auto,
+    pilot,
     ges,
     two,
     close,
@@ -180,6 +184,39 @@ function startGame(mode: PlayMode, run: RunKind, diff: number) {
   const quit = el('button', 'icon-btn quit-btn', '✕');
   quit.addEventListener('click', () => showTitle());
   root.append(pause, quit);
+  // 자동 이동 모드: 아래 스킬 줄 (엄지로 누르기 좋게)
+  if (mode === 'pilot') {
+    const bar = el('div', 'skill-bar');
+    const items: { key: 'dash' | SkillId; label: string; cls: string }[] = [
+      { key: 'dash', label: '회피', cls: 'sb-dash' },
+      { key: 'spin', label: SKILLS.spin.short, cls: '' },
+      { key: 'rush', label: SKILLS.rush.short, cls: '' },
+      { key: 'slam', label: SKILLS.slam.short, cls: '' },
+      { key: 'ult', label: SKILLS.ult.short, cls: 'sb-ult' },
+    ];
+    const btns = items.map((it) => {
+      const b = el('button', `sb ${it.cls}`, it.label);
+      b.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        g.press[it.key] = true;
+      });
+      bar.append(b);
+      return { it, b };
+    });
+    root.append(bar);
+    const tick = () => {
+      if (!g.running) return;
+      for (const { it, b } of btns) {
+        if (it.key === 'dash') continue;
+        const k = g.cdRatio(it.key);
+        b.style.setProperty('--cd', String(k));
+        b.classList.toggle('ready', k <= 0);
+      }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }
   // 두 손 모드: 오른손 버튼
   if (mode === 'two') {
     const pad = el('div', 'action-pad');
