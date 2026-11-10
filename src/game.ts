@@ -68,7 +68,9 @@ export const SKILLS = {
 export type SkillId = keyof typeof SKILLS;
 export const SKILL_IDS = Object.keys(SKILLS) as SkillId[];
 /** 회오리 발차기 반경 */
-const SPIN_R = 108;
+const SPIN_R = 120;
+/** 어퍼가 올려치는 범위 (맞은 적 둘레) */
+const RUSH_R = 85;
 /** 제스처 연계: 기술이 끝난 뒤 다음 제스처를 이어 붙일 수 있는 시간 */
 const CHAIN_WINDOW = 0.55;
 /** 슬라이딩 (제스처 모드 회피): 길이 · 속도 */
@@ -86,7 +88,7 @@ const CINE_T: Record<Exclude<UltStyle, 'random'>, number> = { cutin: 0.95, zoom:
 /** 필살기 연타 시간 / 연타 간격 / 범위 */
 const ULT_FLURRY = 1.25;
 const ULT_GAP = 0.05;
-const ULT_R = 175;
+const ULT_R = 200;
 
 type Kind = 'slime' | 'bat' | 'golem' | 'boss';
 
@@ -982,7 +984,7 @@ export class Game {
         c.next -= dt;
         if (c.next <= 0) {
           c.next = 0.08;
-          const hit = this.aoe(p.x, p.y, 82, 7, 260, 0.25, 0, 1);
+          const hit = this.aoe(p.x, p.y, 100, 7, 260, 0.25, 0, 1);
           this.sprs.push({ name: 'slash', x: p.x, y: p.y - 22, size: 96, life: 0.1, max: 0.1, rot: c.t * 25 });
           if (hit) {
             this.stop = Math.max(this.stop, 0.025 * t.hitstop);
@@ -1018,12 +1020,8 @@ export class Game {
         p.y = c.ey;
         const tgt = c.target && !c.target.dead ? c.target : this.nearest(90);
         if (tgt) {
-          const dx = tgt.x - p.x;
-          const dy = tgt.y - p.y;
-          const d = Math.hypot(dx, dy) || 1;
-          if (tgt.kind !== 'boss') tgt.vz = 430;
-          this.damage(tgt, 32, dx / d, dy / d, 200 * t.knock, 0.7, 40, 3, tgt.x, tgt.y - tgt.r);
-          this.aoe(tgt.x, tgt.y, 40, 10, 260, 0.3, 200, 1);
+          // 올려친 자리 둘레 전부 같은 피해로 띄운다 (보스든 몹 떼든 똑같이)
+          this.aoe(tgt.x, tgt.y, RUSH_R, 32, 200, 0.7, 430, 3);
           this.stop = Math.max(this.stop, 0.12 * t.hitstop);
           this.shake = Math.max(this.shake, 9 * t.shake);
           this.zoom = 1;
@@ -1036,8 +1034,8 @@ export class Game {
       // 지진 내려찍기: 뛰어올라 쾅 → 충격파, 둘레 적을 띄운다
       if (c.hits === 0 && c.t >= 0.42) {
         c.hits = 1;
-        this.aoe(p.x, p.y, 150, 22, 380, 0.9, 260, 3);
-        this.ring(p.x, p.y, 150, 0.45, '#ffb347');
+        this.aoe(p.x, p.y, 175, 22, 380, 0.9, 260, 3);
+        this.ring(p.x, p.y, 175, 0.45, '#ffb347');
         this.ring(p.x, p.y, 90, 0.35, '#ffffff');
         for (let i = 0; i < 26; i++) {
           const a = (i / 26) * Math.PI * 2;
@@ -1076,7 +1074,13 @@ export class Game {
             const d = Math.hypot(dx, dy) || 1;
             p.fx = dx / d;
             p.fy = dy / d;
-            this.damage(e, 7, dx / d, dy / d, 40, 0.3, 4, 1, e.x - (dx / d) * e.r * 0.5, e.y - e.r * 0.7);
+            // 한 타마다 범위 안 적 전부 (최대 40마리)
+            for (const o of inRange.slice(0, 40)) {
+              const ox = o.x - p.x;
+              const oy = o.y - p.y;
+              const od = Math.hypot(ox, oy) || 1;
+              this.damage(o, 7, ox / od, oy / od, 40, 0.3, 4, 1, o.x - (ox / od) * o.r * 0.5, o.y - o.r * 0.7);
+            }
             this.stop = Math.max(this.stop, 0.018 * t.hitstop);
             this.shake = Math.max(this.shake, 3 * t.shake);
           } else {
@@ -1135,7 +1139,7 @@ export class Game {
       const d = Math.hypot(dx, dy) || 1;
       if (d - e.r > st.reach) continue;
       const cos = (dx * p.fx + dy * p.fy) / d;
-      if (cos < Math.cos((80 * Math.PI) / 180) && d > e.r + 6) continue;
+      if (cos < Math.cos((95 * Math.PI) / 180) && d > e.r + 6) continue;
       any = true;
       const hx = e.x - (dx / d) * e.r * 0.6;
       const hy = e.y - e.r * 0.6 - (dy / d) * e.r * 0.3;
@@ -1443,14 +1447,13 @@ export class Game {
       if (Math.random() < 0.8) this.part(o.x, o.y, -o.vx * 0.1, -o.vy * 0.1, 0.25, '#bfe8ff', 3, 0);
       for (const e of this.enemies) {
         if (e.dead || o.hit.has(e)) continue;
-        if (Math.hypot(e.x - o.x, e.y - e.r * 0.5 - o.y) > e.r + 10) continue;
+        if (Math.hypot(e.x - o.x, e.y - e.r * 0.5 - o.y) > e.r + 18) continue;
         o.hit.add(e);
         const sp = Math.hypot(o.vx, o.vy) || 1;
         this.damage(e, WAVE_DMG, o.vx / sp, o.vy / sp, 200 * this.tuning.knock, 0.15, 8, 1, o.x, o.y);
         this.stop = Math.max(this.stop, 0.03 * this.tuning.hitstop);
         this.shake = Math.max(this.shake, 2 * this.tuning.shake);
-        o.life = 0;
-        break;
+        // 꿰뚫고 계속 날아간다 (지나가는 적 모두)
       }
     }
     this.orbs = this.orbs.filter((o) => o.life > 0);
