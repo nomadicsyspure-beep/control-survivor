@@ -412,3 +412,44 @@ button {
   font-weight: 900;
   color: var(--accent);
 }
+
+/* 자동 이동 모드: 아래 스킬 줄 */
+.skill-bar {
+  position: absolute;
+  left: 50%;
+  bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+  translate: -50% 0;
+  display: flex;
+  gap: 10px;
+  z-index: 2;
+}
+
+.sb {
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  border: 3px solid rgba(255, 255, 255, 0.3);
+  font-weight: 900;
+  font-size: 14px;
+  touch-action: none;
+  background:
+    linear-gradient(to top, rgba(0, 0, 0, 0.55) calc(var(--cd, 0) * 100%), transparent 0),
+    rgba(60, 80, 130, 0.7);
+}
+
+.sb.ready {
+  border-color: var(--accent);
+}
+
+.sb-dash {
+  background: rgba(64, 140, 214, 0.7);
+}
+
+.sb-ult {
+  width: 68px;
+  height: 68px;
+  margin-top: -8px;
+  background:
+    linear-gradient(to top, rgba(0, 0, 0, 0.6) calc(var(--cd, 0) * 100%), transparent 0),
+    rgba(214, 64, 46, 0.8);
+}

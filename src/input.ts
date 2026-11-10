@@ -94,6 +94,12 @@ export class Joystick {
     return q;
   }
 
+  /** 키보드로 움직이는 중인지 */
+  get keyMoving() {
+    const k = this.keys;
+    return k.has('w') || k.has('a') || k.has('s') || k.has('d') || k.has('arrowup') || k.has('arrowdown') || k.has('arrowleft') || k.has('arrowright');
+  }
+
   /** 이동 입력 (길이 0~1) */
   get move(): Vec {
     const k = this.keys;
