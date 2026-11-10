@@ -31,6 +31,8 @@ export class Joystick {
   leftOnly = false;
   /** 제스처를 읽을지 (제스처 모드) */
   gestures = false;
+  /** 꾹 눌러 기 모으기 (지금은 끔: 연계로 바꿈) */
+  chargeOn = false;
   private downAt = 0;
   private maxMove = 0;
   private queue: Gesture[] = [];
@@ -80,7 +82,7 @@ export class Joystick {
 
   /** 기 모으는 중이면 모은 시간(초), 아니면 0. 제자리에서 꾹 누르고 있을 때만 */
   get charging() {
-    if (!this.gestures || !this.active || this.maxMove > CHARGE_MOVE) return 0;
+    if (!this.gestures || !this.chargeOn || !this.active || this.maxMove > CHARGE_MOVE) return 0;
     const t = (performance.now() - this.downAt) / 1000;
     return t >= CHARGE_START ? t - CHARGE_START : 0;
   }

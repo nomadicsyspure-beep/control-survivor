@@ -23,9 +23,9 @@ const ROW_OF_DIR8 = [2, 1, 0, 7, 6, 5, 4, 3]; // 각도 8칸(E, SE, S, SW, W, NW
 
 /** 콤보 단계: 길이, 맞는 순간, 쓸 프레임, 사거리, 피해, 밀어내기, 경직, 히트스톱, 흔들림 */
 const STEPS = [
-  { dur: 0.2, hitAt: 0.12, frames: [0, 1, 2], reach: 50, dmg: 10, knock: 220, stun: 0.18, stop: 0.045, shake: 3, poise: 10, lunge: 0 },
-  { dur: 0.2, hitAt: 0.08, frames: [3, 4, 5], reach: 52, dmg: 13, knock: 260, stun: 0.22, stop: 0.055, shake: 4, poise: 14, lunge: 0 },
-  { dur: 0.32, hitAt: 0.15, frames: [1, 2, 3, 4, 4, 5], reach: 66, dmg: 26, knock: 560, stun: 0.5, stop: 0.11, shake: 10, poise: 30, lunge: 260 },
+  { dur: 0.2, hitAt: 0.12, frames: [0, 1, 2], reach: 64, dmg: 10, knock: 220, stun: 0.18, stop: 0.045, shake: 3, poise: 10, lunge: 0 },
+  { dur: 0.2, hitAt: 0.08, frames: [3, 4, 5], reach: 66, dmg: 13, knock: 260, stun: 0.22, stop: 0.055, shake: 4, poise: 14, lunge: 0 },
+  { dur: 0.32, hitAt: 0.15, frames: [1, 2, 3, 4, 4, 5], reach: 84, dmg: 26, knock: 560, stun: 0.5, stop: 0.11, shake: 10, poise: 30, lunge: 260 },
 ];
 /** 콤보를 이어 갈 수 있는 시간 / 마무리 타 뒤 숨 고르기 */
 const COMBO_WINDOW = 0.45;
@@ -44,13 +44,29 @@ const SLOWMO_T = 0.4;
 
 /** 스킬 (쿨타임). 한 손 모드는 조건이 맞으면 자동, 두 손 모드는 버튼 */
 export const SKILLS = {
-  spin: { name: '회오리 발차기', short: '회오리', cd: 6 },
-  rush: { name: '돌진 어퍼', short: '어퍼', cd: 5 },
+  spin: { name: '회오리 발차기', short: '회오리', cd: 1.5 },
+  rush: { name: '슬라이딩 어퍼', short: '어퍼', cd: 4 },
+  spindash: { name: '회오리 돌진', short: '회돌', cd: 4 },
+  spinwave: { name: '회오리 장풍', short: '회장', cd: 4 },
   slam: { name: '지진 내려찍기', short: '지진', cd: 9 },
   ult: { name: '백열권', short: '필살', cd: 20 },
 } as const;
 export type SkillId = keyof typeof SKILLS;
 export const SKILL_IDS = Object.keys(SKILLS) as SkillId[];
+/** 회오리 발차기 반경 */
+const SPIN_R = 108;
+/** 제스처 연계: 기술이 끝난 뒤 다음 제스처를 이어 붙일 수 있는 시간 */
+const CHAIN_WINDOW = 0.55;
+/** 슬라이딩 (제스처 모드 회피): 길이 · 속도 */
+const SLIDE_T = 0.26;
+const SLIDE_SPEED = 470;
+/** 몸통에 닿을 때 피해 배율 (탄막·돌진·범위기는 그대로 아프게) */
+const CONTACT_MUL = 0.3;
+/** 한 손 · 제스처 모드 화면 아래 쿨타임 표시 */
+const HUD_SKILLS: Record<'one' | 'gesture', SkillId[]> = {
+  one: ['spin', 'rush', 'slam', 'ult'],
+  gesture: ['spin', 'rush', 'spindash', 'spinwave', 'slam', 'ult'],
+};
 /** 필살기 연출 길이(초): 이동안 세상이 멈춘다 */
 const CINE_T: Record<Exclude<UltStyle, 'random'>, number> = { cutin: 0.95, zoom: 0.75, domain: 0.8, blackout: 0.65, none: 0 };
 /** 필살기 연타 시간 / 연타 간격 / 범위 */
@@ -159,7 +175,13 @@ export class Game {
   private flashT = 0;
 
   // 스킬
-  private cds: Record<SkillId, number> = { spin: 2, rush: 2, slam: 4, ult: 6 };
+  private cds: Record<SkillId, number> = { spin: 2, rush: 2, spindash: 2, spinwave: 2, slam: 4, ult: 6 };
+  /** 제스처 연계: 지금까지 이은 제스처(T 톡 · F 휙), 이어 붙일 수 있는 남은 시간, 기술 중에 미리 들어온 제스처 */
+  private chainSeq = '';
+  private chainT = 0;
+  private pendingG: Gesture | null = null;
+  private isSlide = false;
+  private slideHits = new Set<Enemy>();
   private cast: { id: SkillId; t: number; phase: number; hits: number; next: number; target: Enemy | null; sx: number; sy: number; ex: number; ey: number } | null = null;
   /** 필살기 연출: 종류, 남은 시간, 처음 길이 */
   private cine: { style: Exclude<UltStyle, 'random'>; t: number; max: number } | null = null;
@@ -185,7 +207,7 @@ export class Game {
   private bannerT = 0;
 
   /** 버튼 입력 (두 손 모드) */
-  readonly press = { attack: false, dash: false, wave: false, spin: false, rush: false, slam: false, ult: false };
+  readonly press = { attack: false, dash: false, wave: false, spin: false, rush: false, spindash: false, spinwave: false, slam: false, ult: false };
 
   /** 스킬 쿨타임 남은 비율 0~1 (버튼 표시용) */
   cdRatio(id: SkillId) {
@@ -364,20 +386,34 @@ export class Game {
     const wantSkill: Record<SkillId, boolean> = {
       spin: two && (this.press.spin || this.joy.pressed('u')),
       rush: two && (this.press.rush || this.joy.pressed('i')),
+      spindash: false,
+      spinwave: false,
       slam: two && (this.press.slam || this.joy.pressed('o')),
       ult: two && (this.press.ult || this.joy.pressed(' ')),
     };
     this.press.attack = this.press.dash = this.press.wave = false;
     this.press.spin = this.press.rush = this.press.slam = this.press.ult = false;
 
+    // 제스처: 기술·슬라이딩 중에 들어온 것은 끝나고 바로 이어서 (마지막 하나만)
+    if (this.mode === 'gesture') {
+      for (const g of this.joy.takeGestures()) this.pendingG = g;
+      if (!this.cast && this.dashT <= 0) {
+        this.chainT -= dt;
+        if (this.chainT <= 0) this.chainSeq = '';
+      }
+    }
     // 스킬 쓰는 중: 그것만
     if (this.cast) {
       this.updateCast(dt);
       return;
     }
-    // 제스처 모드: 톡 = 회오리 · 휙 = 어퍼(그 방향) · 꾹 모았다 떼기 = 장풍 → 지진 → 필살
+    // 제스처 모드: 톡 = 회오리 · 휙 = 슬라이딩, 이어 붙이면 연계 기술
     if (this.mode === 'gesture') {
-      for (const g of this.joy.takeGestures()) if (this.onGesture(g)) return;
+      if (this.pendingG && this.dashT <= 0) {
+        const g = this.pendingG;
+        this.pendingG = null;
+        if (this.onGesture(g)) return;
+      }
     } else {
       // 스킬 발동: 두 손 = 버튼, 한 손 = 조건이 맞으면 자동 (필살기 → 지진 → 회오리 → 어퍼 순)
       for (const id of ['ult', 'slam', 'spin', 'rush'] as SkillId[]) {
@@ -403,11 +439,25 @@ export class Game {
     }
     if (this.dashT > 0) {
       this.dashT -= dt;
-      p.x += this.dashX * DASH_SPEED * dt;
-      p.y += this.dashY * DASH_SPEED * dt;
-      if (Math.random() < 0.7) this.part(p.x, p.y - 4, 0, 0, 0.25, 'rgba(220,235,255,0.7)', 5, 0);
+      const sp = this.isSlide ? SLIDE_SPEED * (0.55 + 0.9 * (this.dashT / SLIDE_T)) : DASH_SPEED;
+      p.x += this.dashX * sp * dt;
+      p.y += this.dashY * sp * dt;
+      if (Math.random() < 0.7) this.part(p.x, p.y - 4, 0, 0, 0.25, this.isSlide ? 'rgba(200,170,130,0.8)' : 'rgba(220,235,255,0.7)', 5, 0);
       p.fx = this.dashX;
       p.fy = this.dashY;
+      if (this.isSlide) {
+        // 슬라이딩으로 지나가는 몹은 걸려 넘어진다 (살짝 띄움)
+        for (const e of this.enemies) {
+          if (e.dead || this.slideHits.has(e) || Math.hypot(e.x - p.x, e.y - p.y) > e.r + p.r + 8) continue;
+          this.slideHits.add(e);
+          if (e.kind !== 'boss') e.vz = Math.max(e.vz, 260);
+          this.damage(e, 6, this.dashX, this.dashY, 80, 0.5, 8, 1, e.x, e.y - e.r * 0.5);
+        }
+        if (this.dashT <= 0) {
+          this.isSlide = false;
+          this.chainT = CHAIN_WINDOW;
+        }
+      }
       return;
     }
 
@@ -515,60 +565,95 @@ export class Game {
       const c = this.countNear(130);
       return c.n >= 4 || (c.boss && c.n >= 1);
     }
-    if (id === 'spin') return this.countNear(80).n >= 3;
+    if (id === 'spin') return this.countNear(SPIN_R - 10).n >= 3;
     const t = this.nearest(240);
     if (!t) return false;
     const d = Math.hypot(t.x - this.p.x, t.y - this.p.y) - t.r;
     return d > 100 && d < 230;
   }
 
-  /** 제스처 하나 처리. 스킬을 시작했으면 true */
+  /**
+   * 제스처 연계: 톡(T) · 휙(F)을 기술이 끝난 뒤 CHAIN_WINDOW 안에 이어 붙이면 다른 기술이 된다.
+   *   T 회오리 · F 슬라이딩
+   *   FT 슬라이딩 어퍼 · TF 회오리 돌진 · TT 회오리 장풍 · FF 이중 슬라이딩
+   *   3단째(아무 제스처) = 마무리: 필살(준비됐으면) → 지진 → 장풍 부채꼴
+   * 쿨타임이면 그 제스처의 기본 기술로. 시작했으면 true
+   */
   private onGesture(g: Gesture) {
     const p = this.p;
-    const notReady = (id: SkillId) => {
-      this.text(p.x, p.y - 64, `${SKILLS[id].short} ${Math.ceil(this.cds[id])}초`, '#9aa4b8', 12);
-      return false;
-    };
-    if (g.type === 'tap') {
-      if (this.cds.spin > 0) return notReady('spin');
-      this.startCast('spin');
-      return true;
+    if (g.type === 'charge') return false;
+    const k = g.type === 'tap' ? 'T' : 'F';
+    const dirX = g.type === 'flick' ? g.dx : p.fx;
+    const dirY = g.type === 'flick' ? g.dy : p.fy;
+    const seq = (this.chainT > 0 ? this.chainSeq : '') + k;
+    this.chainT = 0;
+    let label = '';
+    const ready = (id: SkillId) => this.cds[id] <= 0;
+    if (seq.length >= 3) {
+      this.chainSeq = '';
+      if (ready('ult')) {
+        this.startCast('ult');
+        label = '연계 마무리 · 백열권';
+      } else if (ready('slam')) {
+        this.startCast('slam');
+        label = '연계 마무리 · 지진';
+      } else {
+        this.waveFan(5);
+        label = '연계 마무리 · 장풍';
+        this.chainT = 0;
+      }
+    } else {
+      this.chainSeq = seq;
+      const combo: Record<string, SkillId> = { FT: 'rush', TF: 'spindash', TT: 'spinwave' };
+      const id = combo[seq];
+      if (id && ready(id)) {
+        this.startCast(id, seq === 'FT' ? this.dashX || dirX : dirX, seq === 'FT' ? this.dashY || dirY : dirY);
+        label = `연계 2단 · ${SKILLS[id].name}`;
+      } else if (k === 'F') {
+        this.startSlide(dirX, dirY);
+        if (seq === 'FF') label = '연계 2단 · 이중 슬라이딩';
+      } else if (ready('spin')) {
+        this.startCast('spin');
+      } else {
+        this.text(p.x, p.y - 64, `회오리 ${Math.ceil(this.cds.spin)}초`, '#9aa4b8', 12);
+        this.chainSeq = '';
+        return false;
+      }
     }
-    if (g.type === 'flick') {
-      if (this.cds.rush > 0) return notReady('rush');
-      this.startCast('rush', g.dx, g.dy);
-      return true;
+    if (label) {
+      this.banner = label;
+      this.bannerT = 0.7;
+      this.text(p.x, p.y - 74, label.split(' · ')[0], '#ffd23f', 14);
     }
-    // 기 모으기: 단계가 높을수록 센 기술 (쿨타임이면 한 단계 아래로)
-    const lv = CHARGE_LV.filter((t) => g.t >= t).length;
-    if (lv >= 3 && this.cds.ult <= 0) {
-      this.startCast('ult');
-      return true;
-    }
-    if (lv >= 2 && this.cds.slam <= 0) {
-      this.startCast('slam');
-      return true;
-    }
-    if (lv >= 1 && this.waveCd <= 0) {
-      this.fireWave();
-      this.waveCd = WAVE_CD_MANUAL;
-    }
-    return false;
+    return true;
   }
 
-  /** 장풍 한 발: 가장 가까운 적(없으면 바라보는 쪽)으로 */
-  private fireWave() {
+  /** 슬라이딩: 짧은 무적 미끄러짐. 아슬아슬하면 반격 찬스, 지나가는 몹은 넘어진다 */
+  private startSlide(dx: number, dy: number) {
+    const p = this.p;
+    const l = Math.hypot(dx, dy) || 1;
+    this.dashX = dx / l;
+    this.dashY = dy / l;
+    this.dashT = SLIDE_T;
+    this.isSlide = true;
+    this.slideHits.clear();
+    this.atk = null;
+    p.invuln = Math.max(p.invuln, SLIDE_T + 0.06);
+    sfx.dash();
+    this.sprs.push({ name: 'dust', x: p.x, y: p.y, size: 40, life: 0.25, max: 0.25, rot: 0 });
+    this.checkPerfect();
+  }
+
+  /** 장풍 여러 발을 부채꼴로 */
+  private waveFan(n: number) {
     const p = this.p;
     const far = this.nearest(380);
-    let ax = p.fx;
-    let ay = p.fy;
-    if (far) {
-      const d = Math.hypot(far.x - p.x, far.y - p.y) || 1;
-      ax = (far.x - p.x) / d;
-      ay = (far.y - p.y) / d;
+    const base = far ? Math.atan2(far.y - p.y, far.x - p.x) : Math.atan2(p.fy, p.fx);
+    for (let i = 0; i < n; i++) {
+      const a = base + (i / (n - 1) - 0.5) * 0.9;
+      this.orbs.push({ x: p.x + Math.cos(a) * 18, y: p.y - 22 + Math.sin(a) * 18, vx: Math.cos(a) * WAVE_SPEED, vy: Math.sin(a) * WAVE_SPEED, life: 1.1, hit: new Set() });
     }
-    this.orbs.push({ x: p.x + ax * 18, y: p.y - 22 + ay * 18, vx: ax * WAVE_SPEED, vy: ay * WAVE_SPEED, life: 1.2, hit: new Set() });
-    this.ring(p.x + ax * 18, p.y - 22 + ay * 18, 16, 0.2, '#8fd3ff');
+    this.ring(p.x, p.y - 22, 26, 0.25, '#8fd3ff');
     sfx.wave();
   }
 
@@ -608,6 +693,11 @@ export class Game {
       ex = p.x + p.fx * go;
       ey = p.y + p.fy * go;
     }
+    if (id === 'spindash') {
+      const l = Math.hypot(dirX, dirY) || 1;
+      ex = dirX / l || p.fx;
+      ey = dirY / l || p.fy;
+    }
     this.cast = { id, t: 0, phase: 0, hits: 0, next: 0, target, sx: p.x, sy: p.y, ex, ey };
     p.invuln = Math.max(p.invuln, id === 'ult' ? 99 : id === 'rush' ? 0.3 : 0.15);
     this.banner = SKILLS[id].name;
@@ -631,6 +721,7 @@ export class Game {
   private castEnd() {
     const id = this.cast?.id;
     this.cast = null;
+    if (this.mode === 'gesture' && this.chainSeq) this.chainT = CHAIN_WINDOW;
     if (id === 'ult') {
       this.p.invuln = 0.4;
       this.domainOn = false;
@@ -671,14 +762,46 @@ export class Game {
       if (c.hits < 3 && c.t >= 0.12 * (c.hits + 1)) {
         c.hits++;
         const last = c.hits === 3;
-        const hit = this.aoe(p.x, p.y, 82, last ? 14 : 8, last ? 420 : 120, last ? 0.4 : 0.2, 0, last ? 2 : 1);
-        this.sprs.push({ name: 'slash', x: p.x, y: p.y - 22, size: 92, life: 0.14, max: 0.14, rot: c.t * 20 });
+        const hit = this.aoe(p.x, p.y, SPIN_R, last ? 14 : 8, last ? 420 : 120, last ? 0.4 : 0.2, 0, last ? 2 : 1);
+        this.sprs.push({ name: 'slash', x: p.x, y: p.y - 22, size: SPIN_R * 1.15, life: 0.14, max: 0.14, rot: c.t * 20 });
         if (hit) {
           this.stop = Math.max(this.stop, (last ? 0.07 : 0.035) * t.hitstop);
           this.shake = Math.max(this.shake, (last ? 7 : 3) * t.shake);
         } else sfx.whoosh();
       }
       if (c.t >= 0.46) this.castEnd();
+    } else if (c.id === 'spindash') {
+      // 회오리 돌진: 돌면서 그 방향으로 쭉, 지나가는 적을 계속 친다
+      if (c.t < 0.42) {
+        p.x += c.ex * 430 * dt;
+        p.y += c.ey * 430 * dt;
+        p.fx = c.ex;
+        p.fy = c.ey;
+        c.next -= dt;
+        if (c.next <= 0) {
+          c.next = 0.08;
+          const hit = this.aoe(p.x, p.y, 82, 7, 260, 0.25, 0, 1);
+          this.sprs.push({ name: 'slash', x: p.x, y: p.y - 22, size: 96, life: 0.1, max: 0.1, rot: c.t * 25 });
+          if (hit) {
+            this.stop = Math.max(this.stop, 0.025 * t.hitstop);
+            this.shake = Math.max(this.shake, 3 * t.shake);
+          }
+        }
+        if (Math.random() < 0.8) this.part(p.x, p.y - 6, -c.ex * 80, -c.ey * 80, 0.3, '#e8f2ff', 4, 0);
+      } else this.castEnd();
+    } else if (c.id === 'spinwave') {
+      // 회오리 장풍: 빙글 돌다가 사방으로 장풍 8발
+      if (c.hits === 0 && c.t >= 0.22) {
+        c.hits = 1;
+        for (let i = 0; i < 8; i++) {
+          const a = (i / 8) * Math.PI * 2 + c.t;
+          this.orbs.push({ x: p.x + Math.cos(a) * 20, y: p.y - 22 + Math.sin(a) * 20, vx: Math.cos(a) * WAVE_SPEED, vy: Math.sin(a) * WAVE_SPEED, life: 0.9, hit: new Set() });
+        }
+        this.ring(p.x, p.y - 22, 60, 0.3, '#8fd3ff');
+        this.shake = Math.max(this.shake, 5 * t.shake);
+        sfx.wave();
+      }
+      if (c.t >= 0.4) this.castEnd();
     } else if (c.id === 'rush') {
       // 돌진 어퍼: 순식간에 붙어서 위로 올려친다 (띄우기)
       const dashDur = 0.16;
@@ -810,7 +933,7 @@ export class Game {
       const d = Math.hypot(dx, dy) || 1;
       if (d - e.r > st.reach) continue;
       const cos = (dx * p.fx + dy * p.fy) / d;
-      if (cos < Math.cos((70 * Math.PI) / 180) && d > e.r + 6) continue;
+      if (cos < Math.cos((80 * Math.PI) / 180) && d > e.r + 6) continue;
       any = true;
       const hx = e.x - (dx / d) * e.r * 0.6;
       const hy = e.y - e.r * 0.6 - (dy / d) * e.r * 0.3;
@@ -893,20 +1016,21 @@ export class Game {
     }
   }
 
-  private hurtPlayer(dmg: number, fx: number, fy: number) {
+  /** 맞았다. heavy = 탄막·돌진·범위기 (아프고 크게 밀린다) / 아니면 몸통 박치기 (살짝) */
+  private hurtPlayer(dmg: number, fx: number, fy: number, heavy = true) {
     const p = this.p;
     if (p.invuln > 0 || p.dead) return;
     p.hp -= dmg;
-    p.invuln = 0.7;
+    p.invuln = heavy ? 0.7 : 0.45;
     const dx = p.x - fx;
     const dy = p.y - fy;
     const d = Math.hypot(dx, dy) || 1;
-    p.kx = (dx / d) * 260;
-    p.ky = (dy / d) * 260;
-    this.shake = Math.max(this.shake, 6 * this.tuning.shake);
-    this.hurtFlash = 0.35;
-    this.text(p.x, p.y - 56, `-${Math.round(dmg)}`, '#ff6b6b', 15);
-    this.atk = null;
+    p.kx = (dx / d) * (heavy ? 260 : 90);
+    p.ky = (dy / d) * (heavy ? 260 : 90);
+    this.shake = Math.max(this.shake, (heavy ? 6 : 1.5) * this.tuning.shake);
+    this.hurtFlash = heavy ? 0.35 : 0.12;
+    this.text(p.x, p.y - 56, `-${Math.round(dmg)}`, '#ff6b6b', heavy ? 15 : 11);
+    if (heavy) this.atk = null;
     sfx.hurt();
     if (p.hp <= 0) {
       p.dead = true;
@@ -986,7 +1110,11 @@ export class Game {
         }
       }
       // 몸통 박치기
-      if (d < e.r + p.r && e.stun <= 0) this.hurtPlayer(e.dmg, e.x, e.y);
+      // 몸통 박치기는 약하게, 돌진 중엔 세게
+      if (d < e.r + p.r && e.stun <= 0) {
+        const dashing = e.dashT > 0;
+        this.hurtPlayer(e.dmg * (dashing ? 1.25 : CONTACT_MUL), e.x, e.y, dashing);
+      }
     }
     // 서로 겹치지 않게
     const list = this.enemies.filter((e) => !e.dead);
@@ -1016,7 +1144,7 @@ export class Game {
     if (e.kind === 'bat') {
       const a = Math.atan2(uy, ux);
       const spread = this.wave >= 6 ? [-0.25, 0, 0.25] : [0];
-      for (const k of spread) this.shoot(e.x, e.y - 8, a + k, 190, e.dmg, false);
+      for (const k of spread) this.shoot(e.x, e.y - 8, a + k, 190, e.dmg * 1.5, false);
     } else if (e.kind === 'golem') {
       e.dashT = 0.5;
     }
@@ -1040,7 +1168,7 @@ export class Game {
         e.volT = rage ? 0.25 : 0.33;
         const a = Math.atan2(uy, ux);
         const n = rage ? 7 : 5;
-        for (let i = 0; i < n; i++) this.shoot(e.x, e.y - 10, a + (i / (n - 1) - 0.5) * 0.7, 220, e.dmg * 0.6, true);
+        for (let i = 0; i < n; i++) this.shoot(e.x, e.y - 10, a + (i / (n - 1) - 0.5) * 0.7, 220, e.dmg * 0.9, true);
       }
       return;
     }
@@ -1051,8 +1179,8 @@ export class Game {
           const n = rage ? 22 : 16;
           const off = Math.random() * Math.PI;
           for (let i = 0; i < n; i++) {
-            this.shoot(e.x, e.y - 10, off + (i / n) * Math.PI * 2, 150, e.dmg * 0.6, true);
-            this.shoot(e.x, e.y - 10, off + ((i + 0.5) / n) * Math.PI * 2, 105, e.dmg * 0.6, true);
+            this.shoot(e.x, e.y - 10, off + (i / n) * Math.PI * 2, 150, e.dmg * 0.9, true);
+            this.shoot(e.x, e.y - 10, off + ((i + 0.5) / n) * Math.PI * 2, 105, e.dmg * 0.9, true);
           }
         } else if (e.pat % 4 === 1) {
           e.volN = rage ? 4 : 3;
@@ -1531,7 +1659,7 @@ export class Game {
     const k = ((Math.round(a / (Math.PI / 4)) % 8) + 8) % 8;
     let row = ROW_OF_DIR8[k];
     const c = this.cast;
-    if (c && c.id === 'spin') {
+    if (c && (c.id === 'spin' || c.id === 'spindash' || c.id === 'spinwave')) {
       // 회오리: 방향을 빙글빙글 돌린다
       action = 'run';
       frame = 3;
@@ -1545,6 +1673,10 @@ export class Game {
     } else if (c && c.id === 'ult') {
       action = 'punch';
       frame = c.t < ULT_FLURRY ? 2 + (Math.floor(c.t * 30) % 3) : 4;
+    } else if (this.dashT > 0 && this.isSlide) {
+      // 슬라이딩: 낮게 웅크린 자세
+      action = 'jump';
+      frame = 6;
     } else if (this.dashT > 0) {
       action = 'run';
       frame = 3;
@@ -1694,10 +1826,11 @@ export class Game {
     }
     // 스킬 쿨타임 (한 손 모드: 아래 가운데에 작은 원)
     if (this.mode !== 'two') {
-      const n = SKILL_IDS.length;
+      const list = HUD_SKILLS[this.mode === 'gesture' ? 'gesture' : 'one'];
+      const n = list.length;
       const gap = 52;
       const by = this.h - 34 - (Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sab')) || 0);
-      SKILL_IDS.forEach((id, i) => {
+      list.forEach((id, i) => {
         const x = this.w / 2 + (i - (n - 1) / 2) * gap;
         const r = id === 'ult' ? 21 : 18;
         const cdk = this.cdRatio(id);
@@ -1725,7 +1858,7 @@ export class Game {
       if (this.mode === 'gesture' && this.time < 10) {
         ctx.globalAlpha = Math.min(1, (10 - this.time) / 2);
         ctx.fillStyle = 'rgba(0,0,0,0.55)';
-        const hint = '톡 = 회오리 · 휙 = 어퍼 · 꾹 모았다 떼기 = 장풍 → 지진 → 필살';
+        const hint = '톡 회오리 · 휙 슬라이딩 · 이어 붙이면 연계!';
         ctx.font = '700 12px system-ui, sans-serif';
         const tw = ctx.measureText(hint).width + 20;
         ctx.fillRect(this.w / 2 - tw / 2, by - 58, tw, 24);

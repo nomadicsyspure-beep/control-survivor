@@ -30,7 +30,7 @@ function showTitle() {
   const two = el('button', 'btn big', '두 손 모드 (테스트)');
   two.append(el('small', '', '왼손 이동 · 오른손 공격 · 회피 · 장풍'));
   const ges = el('button', 'btn big', '제스처 모드 (한 손)');
-  ges.append(el('small', '', '끌기 이동 · 톡 회오리 · 휙 어퍼 · 꾹 모았다 떼기 장풍→지진→필살'));
+  ges.append(el('small', '', '끌기 이동 · 톡 회오리 · 휙 슬라이딩 · 이어 붙이면 연계 기술'));
   ges.addEventListener('click', () => startGame('gesture'));
   one.addEventListener('click', () => startGame('one'));
   two.addEventListener('click', () => startGame('two'));
