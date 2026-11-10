@@ -6,6 +6,18 @@ export interface Vec {
   y: number;
 }
 
+/** 제스처 (제스처 모드): 톡 = 짧게 누르고 떼기 · 휙 = 빠르게 짧게 긋기 · 기 모으기 = 제자리에서 꾹 눌렀다 떼기 */
+export type Gesture = { type: 'tap' } | { type: 'flick'; dx: number; dy: number } | { type: 'charge'; t: number };
+
+/** 제스처 판정 기준 */
+const TAP_MS = 200;
+const TAP_MOVE = 12;
+const FLICK_MS = 230;
+const FLICK_DIST = 45;
+/** 이만큼 안 움직이고 누르고 있으면 기 모으기 */
+export const CHARGE_START = 0.28;
+const CHARGE_MOVE = 16;
+
 export class Joystick {
   active = false;
   ox = 0;
@@ -17,6 +29,11 @@ export class Joystick {
   private keys = new Set<string>();
   /** 조이스틱을 받을 영역 (두 손 모드는 왼쪽 절반) */
   leftOnly = false;
+  /** 제스처를 읽을지 (제스처 모드) */
+  gestures = false;
+  private downAt = 0;
+  private maxMove = 0;
+  private queue: Gesture[] = [];
 
   constructor(el: HTMLElement) {
     el.addEventListener('pointerdown', (e) => {
@@ -28,14 +45,27 @@ export class Joystick {
       this.id = e.pointerId;
       this.ox = this.x = e.clientX;
       this.oy = this.y = e.clientY;
+      this.downAt = performance.now();
+      this.maxMove = 0;
     });
     window.addEventListener('pointermove', (e) => {
       if (!this.active || e.pointerId !== this.id) return;
       this.x = e.clientX;
       this.y = e.clientY;
+      this.maxMove = Math.max(this.maxMove, Math.hypot(this.x - this.ox, this.y - this.oy));
     });
     const up = (e: PointerEvent) => {
-      if (e.pointerId === this.id) this.release();
+      if (e.pointerId !== this.id) return;
+      if (this.gestures) {
+        const ms = performance.now() - this.downAt;
+        const dx = this.x - this.ox;
+        const dy = this.y - this.oy;
+        const d = Math.hypot(dx, dy);
+        if (this.charging > 0) this.queue.push({ type: 'charge', t: this.charging });
+        else if (ms < TAP_MS && this.maxMove < TAP_MOVE) this.queue.push({ type: 'tap' });
+        else if (ms < FLICK_MS && d > FLICK_DIST) this.queue.push({ type: 'flick', dx: dx / d, dy: dy / d });
+      }
+      this.release();
     };
     window.addEventListener('pointerup', up);
     window.addEventListener('pointercancel', up);
@@ -48,6 +78,20 @@ export class Joystick {
     this.id = -1;
   }
 
+  /** 기 모으는 중이면 모은 시간(초), 아니면 0. 제자리에서 꾹 누르고 있을 때만 */
+  get charging() {
+    if (!this.gestures || !this.active || this.maxMove > CHARGE_MOVE) return 0;
+    const t = (performance.now() - this.downAt) / 1000;
+    return t >= CHARGE_START ? t - CHARGE_START : 0;
+  }
+
+  /** 쌓인 제스처를 꺼낸다 */
+  takeGestures() {
+    const q = this.queue;
+    this.queue = [];
+    return q;
+  }
+
   /** 이동 입력 (길이 0~1) */
   get move(): Vec {
     const k = this.keys;
@@ -58,6 +102,8 @@ export class Joystick {
       return { x: kx / l, y: ky / l };
     }
     if (!this.active) return { x: 0, y: 0 };
+    // 기 모으는 중엔 제자리
+    if (this.charging > 0) return { x: 0, y: 0 };
     const dx = this.x - this.ox;
     const dy = this.y - this.oy;
     const d = Math.hypot(dx, dy);
