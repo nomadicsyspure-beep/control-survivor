@@ -13,6 +13,8 @@ export interface Tuning {
   ultStyle: UltStyle;
   /** 테스트: 스킬·필살기 쿨타임 없애기 */
   noCd: boolean;
+  /** 도움: 적 탄 느리게 (×0.75) */
+  slowBullets: boolean;
   /** 맞힌 순간 멈춤 배율 */
   hitstop: number;
   /** 화면 흔들림 배율 */
@@ -22,7 +24,7 @@ export interface Tuning {
 }
 
 const KEY = 'control-survivor.settings.v1';
-export const DEFAULT_TUNING: Tuning = { ultStyle: 'cutin', noCd: false, hitstop: 1, shake: 1, knock: 1 };
+export const DEFAULT_TUNING: Tuning = { ultStyle: 'cutin', noCd: false, slowBullets: false, hitstop: 1, shake: 1, knock: 1 };
 
 export function loadTuning(): Tuning {
   try {
@@ -179,7 +181,14 @@ export function openSettings(tuning: Tuning, onClose: () => void) {
     noCd.classList.toggle('on', tuning.noCd);
     noCd.textContent = `쿨타임 없애기 (테스트): ${tuning.noCd ? 'ON' : 'OFF'}`;
   });
-  ult.append(el('div', 'section-title', '필살기 연출 (백열권)'), chips, noCd);
+  const slow = el('button', 'chip' + (tuning.slowBullets ? ' on' : ''), `도움: 적 탄 느리게 ${tuning.slowBullets ? 'ON' : 'OFF'}`);
+  slow.addEventListener('click', () => {
+    tuning.slowBullets = !tuning.slowBullets;
+    saveTuning(tuning);
+    slow.classList.toggle('on', tuning.slowBullets);
+    slow.textContent = `도움: 적 탄 느리게 ${tuning.slowBullets ? 'ON' : 'OFF'}`;
+  });
+  ult.append(el('div', 'section-title', '필살기 연출 (백열권)'), chips, noCd, el('div', 'section-title', '도움'), slow);
   const close = el('button', 'btn primary', '닫기');
   const done = () => {
     viewer.stop();

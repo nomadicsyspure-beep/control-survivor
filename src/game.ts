@@ -3,12 +3,25 @@ import { Joystick, type Gesture } from './input';
 import { sfx } from './sfx';
 import { FX, MON, monFrames, ready, whiteOf } from './sprites';
 import type { Tuning, UltStyle } from './settings';
+import { DIFFS, atkMul, hpMul, skillCdMul, skillDmgMul, type Save } from './save';
 
 // 손맛 시험장: 격투 소년 하나, 적은 수의 단단한 몹(역할이 있다), 5웨이브마다 보스.
 // 한 손 모드: 이동만 — 펀치 콤보와 장풍은 자동. 두 손 모드(테스트): 공격·회피·장풍 버튼.
 // 타격감: 히트스톱 · 화면 흔들림 · 하얀 번쩍임 · 밀려남 · 경직 · 찌그러짐 · 불꽃 · 마무리 타는 속도선과 화면 당김.
 
 export type PlayMode = 'one' | 'two' | 'gesture';
+/** 판 종류: 도파민(3분 동안 몰려오는 몹 쓸어 담기) / 도전(웨이브 + 5웨이브마다 보스, 난이도) */
+export type RunKind = 'horde' | 'challenge';
+export interface GameOpts {
+  control: PlayMode;
+  run: RunKind;
+  /** 도전 모드 난이도 0 보통 · 1 어려움 · 2 지옥 */
+  diff: number;
+  save: Save;
+}
+/** 도파민 모드 길이(초) · 몹 최대 수 */
+const HORDE_SEC = 180;
+const HORDE_MAX = 240;
 /** 제스처 모드 기 모으기 단계 (모은 시간, 초): 1 장풍 · 2 지진 · 3 필살 */
 export const CHARGE_LV = [0.35, 0.95, 1.7];
 
@@ -119,10 +132,17 @@ interface Ring { x: number; y: number; r: number; life: number; max: number; col
 interface Lane { x1: number; y1: number; x2: number; y2: number; w: number; t: number; max: number }
 
 export interface GameResult {
+  run: RunKind;
+  diff: number;
+  /** 도파민 모드를 끝까지 버텼나 */
+  win: boolean;
   wave: number;
   kills: number;
   bestCombo: number;
   time: number;
+  /** 이번 판에 번 골드·별 */
+  gold: number;
+  stars: number;
 }
 
 export class Game {
@@ -214,7 +234,24 @@ export class Game {
     return Math.max(0, Math.min(1, this.cds[id] / SKILLS[id].cd));
   }
 
-  constructor(host: HTMLElement, readonly mode: PlayMode, private readonly tuning: Tuning, private readonly onEnd: (r: GameResult) => void) {
+  readonly mode: PlayMode;
+  readonly run: RunKind;
+  readonly diff: number;
+  private readonly save: Save;
+  /** 이번 판에 번 골드·별 */
+  private gold = 0;
+  private stars = 0;
+  private spawnAcc = 0;
+  private eliteT = 20;
+  private ended = false;
+
+  constructor(host: HTMLElement, opts: GameOpts, private readonly tuning: Tuning, private readonly onEnd: (r: GameResult) => void) {
+    this.mode = opts.control;
+    this.run = opts.run;
+    this.diff = opts.diff;
+    this.save = opts.save;
+    const mode = this.mode;
+    this.p.maxHp = this.p.hp = Math.round(100 * hpMul(this.save));
     this.canvas = document.createElement('canvas');
     this.canvas.className = 'game-canvas';
     host.append(this.canvas);
@@ -240,7 +277,10 @@ export class Game {
 
   start() {
     this.running = true;
-    this.nextWave();
+    if (this.run === 'horde') {
+      this.banner = '도파민 모드 · 3분 버티기';
+      this.bannerT = 1.8;
+    } else this.nextWave();
     this.last = performance.now();
     const loop = (t: number) => {
       const real = Math.min(0.05, (t - this.last) / 1000);
@@ -283,8 +323,13 @@ export class Game {
 
   private spawn(kind: Kind) {
     const a = Math.random() * Math.PI * 2;
-    const d = 280 + Math.random() * 60;
-    const k = 1 + (this.wave - 1) * 0.12;
+    const horde = this.run === 'horde';
+    // 도파민: 화면 바로 밖 둘레에서 / 도전: 조금 떨어진 곳에서
+    const d = horde ? Math.hypot(this.w, this.h) / 2 / this.scale + 30 + Math.random() * 40 : 280 + Math.random() * 60;
+    const df = DIFFS[this.diff];
+    // 도파민 몹은 약하고(한두 대면 펑) 시간이 갈수록 조금 단단해진다
+    const k = horde ? (kind === 'golem' ? 0.6 : 0.2) * (1 + this.time / 100) : (1 + (this.wave - 1) * 0.12) * df.hp;
+    const dk = horde ? 0.8 : (1 + (this.wave - 1) * 0.06) * df.dmg;
     const base: Record<Kind, [number, number, number, number, number]> = {
       // r, hp, speed, dmg, poise
       slime: [12, 36, 72, 8, 20],
@@ -294,8 +339,9 @@ export class Game {
     };
     const [r, hp, speed, dmg, poise] = base[kind];
     this.enemies.push({
-      kind, x: this.p.x + Math.cos(a) * d, y: this.p.y + Math.sin(a) * d, r, hp: hp * k, maxHp: hp * k, speed, dmg: dmg * (1 + (this.wave - 1) * 0.06),
-      vx: 0, vy: 0, flash: 0, stun: 0, poise, maxPoise: poise, broken: 0, sq: 0, cd: 1.5 + Math.random() * 1.5, cast: 0, dashT: 0, dx: 0, dy: 0,
+      kind, x: this.p.x + Math.cos(a) * d, y: this.p.y + Math.sin(a) * d, r: horde && kind !== 'golem' ? r * 0.9 : r, hp: hp * k, maxHp: hp * k,
+      speed: horde && kind !== 'golem' ? speed * 0.85 : speed, dmg: dmg * dk,
+      vx: 0, vy: 0, flash: 0, stun: 0, poise: horde ? poise * 0.4 : poise, maxPoise: horde ? poise * 0.4 : poise, broken: 0, sq: 0, cd: 1.5 + Math.random() * 1.5, cast: 0, dashT: 0, dx: 0, dy: 0,
       pat: 0, volN: 0, volT: 0, phase: Math.random() * 6, dead: false, z: 0, vz: 0,
     });
   }
@@ -314,7 +360,8 @@ export class Game {
     }
     // 히트스톱: 세상은 멈추고 흔들림만 줄어든다
     if (this.stop > 0) {
-      this.stop -= real;
+      // 도파민 모드는 멈춤을 짧게 (계속 때리니까 흐름이 끊기지 않게)
+      this.stop -= real * (this.run === 'horde' ? 1.7 : 1);
       this.shake = Math.max(0, this.shake - 30 * real);
       return;
     }
@@ -339,15 +386,69 @@ export class Game {
     this.updateShots(dt);
     this.updateFx(dt);
 
-    // 다음 웨이브: 거의 다 잡았거나 오래 걸리면
-    this.waveT += dt;
-    const alive = this.enemies.filter((e) => !e.dead).length;
-    const bossAlive = this.enemies.some((e) => !e.dead && e.kind === 'boss');
-    if (!bossAlive && (alive <= 1 || this.waveT > 22)) this.nextWave();
+    if (this.run === 'horde') this.updateHorde(dt);
+    else {
+      // 다음 웨이브: 거의 다 잡았거나 오래 걸리면
+      this.waveT += dt;
+      const alive = this.enemies.filter((e) => !e.dead).length;
+      const bossAlive = this.enemies.some((e) => !e.dead && e.kind === 'boss');
+      if (!bossAlive && (alive <= 1 || this.waveT > 22)) this.nextWave();
+    }
 
     // 카메라
     this.camX += (this.p.x - this.camX) * Math.min(1, 8 * dt);
     this.camY += (this.p.y - this.camY) * Math.min(1, 8 * dt);
+  }
+
+  /** 도파민 모드: 몹이 끊임없이 몰려온다 (점점 많이), 20초마다 골렘. 3분 버티면 끝 */
+  private updateHorde(dt: number) {
+    const rate = 9 + this.time * 0.18;
+    this.spawnAcc += rate * dt;
+    while (this.spawnAcc >= 1) {
+      this.spawnAcc -= 1;
+      if (this.enemies.length < HORDE_MAX) this.spawn(Math.random() < 0.35 ? 'bat' : 'slime');
+    }
+    // 몹 무리: 가끔 한 덩어리로 우르르
+    if (Math.random() < dt * 0.35) for (let i = 0; i < 16; i++) this.spawn('slime');
+    this.eliteT -= dt;
+    if (this.eliteT <= 0) {
+      this.eliteT = 20;
+      const n = 1 + Math.floor(this.time / 60);
+      for (let i = 0; i < n; i++) this.spawn('golem');
+      this.banner = '골렘 등장!';
+      this.bannerT = 1;
+    }
+    // 너무 멀어진 몹은 앞으로 다시
+    const far = Math.hypot(this.w, this.h) / this.scale;
+    for (const e of this.enemies) {
+      if (Math.hypot(e.x - this.p.x, e.y - this.p.y) > far) {
+        const a = Math.random() * Math.PI * 2;
+        const d = Math.hypot(this.w, this.h) / 2 / this.scale + 30;
+        e.x = this.p.x + Math.cos(a) * d;
+        e.y = this.p.y + Math.sin(a) * d;
+      }
+    }
+    this.wave = 1 + Math.floor(this.time / 30);
+    if (this.time >= HORDE_SEC) this.finish(true);
+  }
+
+  /** 판 끝: 잠깐 보여 주고 결과 */
+  private finish(win: boolean) {
+    if (this.ended) return;
+    this.ended = true;
+    this.banner = win ? '3분 버텼다! 끝!' : '쓰러졌다…';
+    this.bannerT = 99;
+    if (win) {
+      this.gold += 100;
+      this.p.invuln = 99;
+    }
+    setTimeout(() => {
+      this.running = false;
+      this.onEnd({
+        run: this.run, diff: this.diff, win, wave: this.wave, kills: this.kills, bestCombo: this.bestCombo, time: this.time,
+        gold: Math.round(this.gold), stars: this.stars,
+      });
+    }, 1200);
   }
 
   private nearest(range: number) {
@@ -659,7 +760,7 @@ export class Game {
 
   private startCast(id: SkillId, dirX = 0, dirY = 0) {
     const p = this.p;
-    this.cds[id] = SKILLS[id].cd;
+    this.cds[id] = SKILLS[id].cd * skillCdMul(this.save, id);
     this.atk = null;
     // 어퍼: 방향을 줬으면 그쪽 부채꼴(±45°) 안의 가장 가까운 적, 없으면 그 방향으로 쑥
     let target: Enemy | null = null;
@@ -959,7 +1060,8 @@ export class Game {
   private damage(e: Enemy, dmg: number, ux: number, uy: number, knock: number, stun: number, poise: number, power: number, hx: number, hy: number) {
     const brokenMul = e.broken > 0 ? 1.5 : 1;
     const crit = Math.random() < 0.12;
-    const v = Math.round(dmg * brokenMul * (crit ? 2 : 1) * (0.9 + Math.random() * 0.2));
+    const sk = this.cast ? skillDmgMul(this.save, this.cast.id) : 1;
+    const v = Math.round(dmg * atkMul(this.save) * sk * brokenMul * (crit ? 2 : 1) * (0.9 + Math.random() * 0.2));
     e.hp -= v;
     e.flash = 0.09;
     e.sq = 1;
@@ -977,12 +1079,15 @@ export class Game {
         e.broken = e.kind === 'boss' ? 2.2 : 1.2;
         e.stun = Math.max(e.stun, e.broken);
         e.poise = e.maxPoise;
-        this.text(e.x, e.y - e.r * 2.6, '무너짐!', '#ffd23f', e.kind === 'boss' ? 22 : 16);
+        if (!(this.run === 'horde' && e.maxHp < 40)) this.text(e.x, e.y - e.r * 2.6, '무너짐!', '#ffd23f', e.kind === 'boss' ? 22 : 16);
         this.ring(e.x, e.y - e.r * 0.6, e.r * 2.4, 0.35, '#ffd23f');
         this.stop = Math.max(this.stop, 0.08 * this.tuning.hitstop);
       }
     }
-    this.text(hx, hy - 14, String(v), crit ? '#ffb347' : '#ffffff', crit ? 20 + power * 2 : 13 + power * 2);
+    // 도파민 모드의 약한 몹은 숫자를 줄인다 (화면이 숫자로 덮이지 않게)
+    if (!(this.run === 'horde' && e.maxHp < 40 && !crit && Math.random() < 0.7)) {
+      this.text(hx, hy - 14, String(v), crit ? '#ffb347' : '#ffffff', crit ? 20 + power * 2 : 13 + power * 2);
+    }
     this.sprs.push({ name: 'star-burst', x: hx, y: hy, size: 26 + power * 12, life: 0.16, max: 0.16, rot: Math.random() * 6 });
     const n = 4 + power * 4;
     for (let i = 0; i < n; i++) {
@@ -1000,6 +1105,16 @@ export class Game {
   private kill(e: Enemy, ux: number, uy: number) {
     e.dead = true;
     this.kills++;
+    // 보상: 도파민 = 처치마다 골드(시간이 갈수록 조금씩 더) / 도전 = 난이도만큼 골드, 보스는 별
+    if (this.run === 'horde') this.gold += (e.kind === 'golem' ? 15 : 1) * (1 + this.time / 120);
+    else {
+      const df = DIFFS[this.diff];
+      this.gold += df.gold * (e.kind === 'boss' ? 30 : e.kind === 'golem' ? 4 : 1);
+      if (e.kind === 'boss') {
+        this.stars += df.stars;
+        this.text(e.x, e.y - e.r * 3.2, `⭐ +${df.stars}`, '#ffe066', 22);
+      }
+    }
     sfx.kill();
     this.sprs.push({ name: 'dust', x: e.x, y: e.y, size: e.r * 3, life: 0.35, max: 0.35, rot: 0 });
     const colors: Record<Kind, string[]> = { slime: ['#7fd06a', '#bff0a8'], bat: ['#6a4a8a', '#b38ad8'], golem: ['#8a7f74', '#c8bdb0'], boss: ['#b03050', '#ff8fa3', '#ffd23f'] };
@@ -1034,12 +1149,7 @@ export class Game {
     sfx.hurt();
     if (p.hp <= 0) {
       p.dead = true;
-      this.banner = '쓰러졌다…';
-      this.bannerT = 99;
-      setTimeout(() => {
-        this.running = false;
-        this.onEnd({ wave: this.wave, kills: this.kills, bestCombo: this.bestCombo, time: this.time });
-      }, 1200);
+      this.finish(false);
     }
   }
 
@@ -1099,7 +1209,7 @@ export class Game {
         e.x += (mx / ml) * e.speed * dt;
         e.y += (my / ml) * e.speed * dt;
         e.cd -= dt;
-        if (e.cd <= 0 && e.kind !== 'slime' && d < 300) {
+        if (e.cd <= 0 && e.kind !== 'slime' && !(this.run === 'horde' && e.kind === 'bat') && d < 300) {
           e.cast = e.kind === 'golem' ? 0.6 : 0.45;
           e.cd = e.kind === 'golem' ? 4 : 2.6;
           if (e.kind === 'golem') {
@@ -1209,6 +1319,7 @@ export class Game {
   }
 
   private shoot(x: number, y: number, a: number, speed: number, dmg: number, boss: boolean) {
+    speed *= DIFFS[this.diff].bullet * (this.tuning.slowBullets ? 0.75 : 1);
     this.bullets.push({ x, y, vx: Math.cos(a) * speed, vy: Math.sin(a) * speed, r: boss ? 6 : 5, dmg, life: 4, boss });
   }
 
@@ -1802,7 +1913,15 @@ export class Game {
     ctx.font = '800 11px system-ui, sans-serif';
     ctx.textAlign = 'left';
     ctx.fillText(`HP ${Math.max(0, Math.ceil(p.hp))}`, 18, top + 12);
-    ctx.fillText(`WAVE ${this.wave} · 처치 ${this.kills}${this.mode === 'two' ? ' · 두 손 (테스트)' : this.mode === 'gesture' ? ' · 제스처' : ''}`, 12, top + 32);
+    if (this.run === 'horde') {
+      const left = Math.max(0, Math.ceil(HORDE_SEC - this.time));
+      ctx.fillText(`도파민 · 남은 ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')} · 처치 ${this.kills}`, 12, top + 32);
+    } else {
+      const ctrl = this.mode === 'two' ? ' · 두 손' : this.mode === 'gesture' ? ' · 제스처' : ' · 자동';
+      ctx.fillText(`도전 ${DIFFS[this.diff].name} · WAVE ${this.wave} · 처치 ${this.kills}${ctrl}`, 12, top + 32);
+    }
+    ctx.fillStyle = '#ffd23f';
+    ctx.fillText(`🪙 ${Math.floor(this.gold)}${this.stars ? `  ⭐ ${this.stars}` : ''}`, 12, top + 48);
     // 연타 수
     if (this.hits >= 2) {
       ctx.textAlign = 'right';
