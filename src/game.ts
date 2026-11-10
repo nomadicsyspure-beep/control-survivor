@@ -1,5 +1,5 @@
 import { CELL, loadSheet, type HeroAction, type Sheet } from './hero';
-import { Joystick } from './input';
+import { Joystick, type Gesture } from './input';
 import { sfx } from './sfx';
 import { FX, MON, monFrames, ready, whiteOf } from './sprites';
 import type { Tuning, UltStyle } from './settings';
@@ -8,7 +8,9 @@ import type { Tuning, UltStyle } from './settings';
 // 한 손 모드: 이동만 — 펀치 콤보와 장풍은 자동. 두 손 모드(테스트): 공격·회피·장풍 버튼.
 // 타격감: 히트스톱 · 화면 흔들림 · 하얀 번쩍임 · 밀려남 · 경직 · 찌그러짐 · 불꽃 · 마무리 타는 속도선과 화면 당김.
 
-export type PlayMode = 'one' | 'two';
+export type PlayMode = 'one' | 'two' | 'gesture';
+/** 제스처 모드 기 모으기 단계 (모은 시간, 초): 1 장풍 · 2 지진 · 3 필살 */
+export const CHARGE_LV = [0.35, 0.95, 1.7];
 
 /** 화면의 짧은 변에 보이는 세계 크기 (세로·가로 어느 쪽이든 위험 거리가 같게) */
 const VIEW = 340;
@@ -197,6 +199,7 @@ export class Game {
     this.ctx = this.canvas.getContext('2d')!;
     this.joy = new Joystick(host);
     this.joy.leftOnly = mode === 'two';
+    this.joy.gestures = mode === 'gesture';
     for (const a of ['idle', 'walk', 'run', 'punch', 'jump'] as HeroAction[]) void loadSheet(a).then((s) => (this.sheets[a] = s));
     this.resize();
     window.addEventListener('resize', this.resize);
@@ -372,12 +375,17 @@ export class Game {
       this.updateCast(dt);
       return;
     }
-    // 스킬 발동: 두 손 = 버튼, 한 손 = 조건이 맞으면 자동 (필살기 → 지진 → 회오리 → 어퍼 순)
-    for (const id of ['ult', 'slam', 'spin', 'rush'] as SkillId[]) {
-      if (this.cds[id] > 0 || this.dashT > 0) continue;
-      if (two ? wantSkill[id] : this.autoSkill(id)) {
-        this.startCast(id);
-        return;
+    // 제스처 모드: 톡 = 회오리 · 휙 = 어퍼(그 방향) · 꾹 모았다 떼기 = 장풍 → 지진 → 필살
+    if (this.mode === 'gesture') {
+      for (const g of this.joy.takeGestures()) if (this.onGesture(g)) return;
+    } else {
+      // 스킬 발동: 두 손 = 버튼, 한 손 = 조건이 맞으면 자동 (필살기 → 지진 → 회오리 → 어퍼 순)
+      for (const id of ['ult', 'slam', 'spin', 'rush'] as SkillId[]) {
+        if (this.cds[id] > 0 || this.dashT > 0) continue;
+        if (two ? wantSkill[id] : this.autoSkill(id)) {
+          this.startCast(id);
+          return;
+        }
       }
     }
 
@@ -450,7 +458,7 @@ export class Game {
     // 장풍: 한 손 = 조금 먼 적에게 가끔 자동, 두 손 = 버튼
     if (this.waveCd <= 0) {
       const far = this.nearest(380);
-      const autoGo = !two && far && Math.hypot(far.x - p.x, far.y - p.y) > 110;
+      const autoGo = this.mode === 'one' && far && Math.hypot(far.x - p.x, far.y - p.y) > 110;
       if (autoGo || wantWave) {
         this.waveCd = two ? WAVE_CD_MANUAL : WAVE_CD_AUTO;
         let ax = p.fx;
@@ -514,13 +522,82 @@ export class Game {
     return d > 100 && d < 230;
   }
 
-  private startCast(id: SkillId) {
+  /** 제스처 하나 처리. 스킬을 시작했으면 true */
+  private onGesture(g: Gesture) {
+    const p = this.p;
+    const notReady = (id: SkillId) => {
+      this.text(p.x, p.y - 64, `${SKILLS[id].short} ${Math.ceil(this.cds[id])}초`, '#9aa4b8', 12);
+      return false;
+    };
+    if (g.type === 'tap') {
+      if (this.cds.spin > 0) return notReady('spin');
+      this.startCast('spin');
+      return true;
+    }
+    if (g.type === 'flick') {
+      if (this.cds.rush > 0) return notReady('rush');
+      this.startCast('rush', g.dx, g.dy);
+      return true;
+    }
+    // 기 모으기: 단계가 높을수록 센 기술 (쿨타임이면 한 단계 아래로)
+    const lv = CHARGE_LV.filter((t) => g.t >= t).length;
+    if (lv >= 3 && this.cds.ult <= 0) {
+      this.startCast('ult');
+      return true;
+    }
+    if (lv >= 2 && this.cds.slam <= 0) {
+      this.startCast('slam');
+      return true;
+    }
+    if (lv >= 1 && this.waveCd <= 0) {
+      this.fireWave();
+      this.waveCd = WAVE_CD_MANUAL;
+    }
+    return false;
+  }
+
+  /** 장풍 한 발: 가장 가까운 적(없으면 바라보는 쪽)으로 */
+  private fireWave() {
+    const p = this.p;
+    const far = this.nearest(380);
+    let ax = p.fx;
+    let ay = p.fy;
+    if (far) {
+      const d = Math.hypot(far.x - p.x, far.y - p.y) || 1;
+      ax = (far.x - p.x) / d;
+      ay = (far.y - p.y) / d;
+    }
+    this.orbs.push({ x: p.x + ax * 18, y: p.y - 22 + ay * 18, vx: ax * WAVE_SPEED, vy: ay * WAVE_SPEED, life: 1.2, hit: new Set() });
+    this.ring(p.x + ax * 18, p.y - 22 + ay * 18, 16, 0.2, '#8fd3ff');
+    sfx.wave();
+  }
+
+  private startCast(id: SkillId, dirX = 0, dirY = 0) {
     const p = this.p;
     this.cds[id] = SKILLS[id].cd;
     this.atk = null;
-    const target = id === 'rush' ? this.nearest(260) : null;
-    let ex = p.x;
-    let ey = p.y;
+    // 어퍼: 방향을 줬으면 그쪽 부채꼴(±45°) 안의 가장 가까운 적, 없으면 그 방향으로 쑥
+    let target: Enemy | null = null;
+    if (id === 'rush' && (dirX || dirY)) {
+      let bd = 280;
+      for (const e of this.enemies) {
+        if (e.dead) continue;
+        const dx = e.x - p.x;
+        const dy = e.y - p.y;
+        const d = Math.hypot(dx, dy) || 1;
+        if ((dx * dirX + dy * dirY) / d < Math.cos(Math.PI / 4)) continue;
+        if (d < bd) {
+          bd = d;
+          target = e;
+        }
+      }
+      if (!target) {
+        p.fx = dirX;
+        p.fy = dirY;
+      }
+    } else if (id === 'rush') target = this.nearest(260);
+    let ex = p.x + (id === 'rush' && !target ? p.fx * 150 : 0);
+    let ey = p.y + (id === 'rush' && !target ? p.fy * 150 : 0);
     if (target) {
       const dx = target.x - p.x;
       const dy = target.y - p.y;
@@ -1502,6 +1579,45 @@ export class Game {
     const size = CELL * HERO_SCALE;
     ctx.drawImage(sheet.img, frame * CELL, row * CELL, CELL, CELL, p.x - size / 2, p.y - HERO_FOOT * HERO_SCALE, size, size);
     ctx.globalAlpha = 1;
+    // 기 모으기 (제스처 모드): 단계마다 색이 바뀌는 고리 + 지금 나갈 기술 이름
+    const ch = this.joy.charging;
+    if (ch > 0) {
+      const lv = CHARGE_LV.filter((t) => ch >= t).length;
+      const nextT = CHARGE_LV[Math.min(lv, CHARGE_LV.length - 1)];
+      const prevT = lv > 0 ? CHARGE_LV[lv - 1] : 0;
+      const k = lv >= CHARGE_LV.length ? 1 : (ch - prevT) / (nextT - prevT);
+      const colors = ['#9aa4b8', '#8fd3ff', '#ffb347', '#ff4d6d'];
+      const names = ['', '장풍', '지진', this.cds.ult <= 0 ? '필살!' : '필살 (쿨타임)'];
+      const cy = p.y - 30;
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+      ctx.beginPath();
+      ctx.arc(p.x, cy, 30, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.strokeStyle = colors[Math.min(lv + 1, 3)];
+      ctx.beginPath();
+      ctx.arc(p.x, cy, 30, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * Math.min(1, k));
+      ctx.stroke();
+      if (lv > 0) {
+        ctx.fillStyle = colors[lv];
+        ctx.globalAlpha = 0.25 + 0.15 * Math.sin(this.time * 20);
+        ctx.beginPath();
+        ctx.arc(p.x, cy, 22 + lv * 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        ctx.textAlign = 'center';
+        ctx.font = '900 13px system-ui, sans-serif';
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+        ctx.strokeText(names[lv], p.x, cy - 40);
+        ctx.fillStyle = colors[lv];
+        ctx.fillText(names[lv], p.x, cy - 40);
+      }
+      if (Math.random() < 0.5) {
+        const a = Math.random() * Math.PI * 2;
+        this.part(p.x + Math.cos(a) * 40, cy + Math.sin(a) * 30, -Math.cos(a) * 90, -Math.sin(a) * 70, 0.3, colors[Math.min(lv + 1, 3)], 3, 0);
+      }
+    }
     // 반격 찬스: 몸에 파란 빛
     if (this.counterReady) {
       ctx.strokeStyle = 'rgba(143,211,255,0.9)';
@@ -1554,7 +1670,7 @@ export class Game {
     ctx.font = '800 11px system-ui, sans-serif';
     ctx.textAlign = 'left';
     ctx.fillText(`HP ${Math.max(0, Math.ceil(p.hp))}`, 18, top + 12);
-    ctx.fillText(`WAVE ${this.wave} · 처치 ${this.kills}${this.mode === 'two' ? ' · 두 손 (테스트)' : ''}`, 12, top + 32);
+    ctx.fillText(`WAVE ${this.wave} · 처치 ${this.kills}${this.mode === 'two' ? ' · 두 손 (테스트)' : this.mode === 'gesture' ? ' · 제스처' : ''}`, 12, top + 32);
     // 연타 수
     if (this.hits >= 2) {
       ctx.textAlign = 'right';
@@ -1577,7 +1693,7 @@ export class Game {
       ctx.globalAlpha = 1;
     }
     // 스킬 쿨타임 (한 손 모드: 아래 가운데에 작은 원)
-    if (this.mode === 'one') {
+    if (this.mode !== 'two') {
       const n = SKILL_IDS.length;
       const gap = 52;
       const by = this.h - 34 - (Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sab')) || 0);
@@ -1606,6 +1722,17 @@ export class Game {
         ctx.font = '800 10px system-ui, sans-serif';
         ctx.fillText(SKILLS[id].short, x, by + 4);
       });
+      if (this.mode === 'gesture' && this.time < 10) {
+        ctx.globalAlpha = Math.min(1, (10 - this.time) / 2);
+        ctx.fillStyle = 'rgba(0,0,0,0.55)';
+        const hint = '톡 = 회오리 · 휙 = 어퍼 · 꾹 모았다 떼기 = 장풍 → 지진 → 필살';
+        ctx.font = '700 12px system-ui, sans-serif';
+        const tw = ctx.measureText(hint).width + 20;
+        ctx.fillRect(this.w / 2 - tw / 2, by - 58, tw, 24);
+        ctx.fillStyle = '#fff3d0';
+        ctx.fillText(hint, this.w / 2, by - 41);
+        ctx.globalAlpha = 1;
+      }
     }
     // 조이스틱
     const j = this.joy;
