@@ -90,7 +90,11 @@ const CINE_T: Record<Exclude<UltStyle, 'random'>, number> = { cutin: 0.95, zoom:
 /** 필살기 연타 시간 / 연타 간격 / 범위 */
 const ULT_FLURRY = 1.25;
 const ULT_GAP = 0.05;
-const ULT_R = 200;
+const ULT_R = 280;
+/** 백열권 순간이동: 시작 자리에서 이 안의 적에게만 옮겨 다닌다 (어지럽지 않게 절반으로) */
+const ULT_HOP_R = 100;
+/** 백열권 한 타에 맞는 최대 수 */
+const ULT_MAX_HITS = 120;
 
 type Kind = 'slime' | 'bat' | 'golem' | 'boss';
 
@@ -1084,19 +1088,25 @@ export class Game {
             e.vy *= 0.3;
           }
           if (inRange.length) {
-            const e = inRange[c.hits % inRange.length];
+            // 순간이동은 시작 자리 가까이(ULT_HOP_R)의 적에게만, 없으면 제자리 둘레에서 살짝
+            const near = inRange.filter((o) => Math.hypot(o.x - c.sx, o.y - c.sy) < ULT_HOP_R);
             const a = Math.random() * Math.PI * 2;
-            // 순간이동하듯 적 옆으로
             this.ghost();
-            p.x = e.x + Math.cos(a) * (e.r + 16);
-            p.y = e.y + Math.sin(a) * (e.r + 10);
-            const dx = e.x - p.x;
-            const dy = e.y - p.y;
-            const d = Math.hypot(dx, dy) || 1;
-            p.fx = dx / d;
-            p.fy = dy / d;
-            // 한 타마다 범위 안 적 전부 (최대 40마리)
-            for (const o of inRange.slice(0, 40)) {
+            if (near.length) {
+              const e = near[c.hits % near.length];
+              p.x = e.x + Math.cos(a) * (e.r + 14);
+              p.y = e.y + Math.sin(a) * (e.r + 8);
+              const dx = e.x - p.x;
+              const dy = e.y - p.y;
+              const d = Math.hypot(dx, dy) || 1;
+              p.fx = dx / d;
+              p.fy = dy / d;
+            } else {
+              p.x = c.sx + Math.cos(a) * 24;
+              p.y = c.sy + Math.sin(a) * 16;
+            }
+            // 한 타마다 범위(ULT_R) 안 적 전부 (최대 ULT_MAX_HITS)
+            for (const o of inRange.slice(0, ULT_MAX_HITS)) {
               const ox = o.x - p.x;
               const oy = o.y - p.y;
               const od = Math.hypot(ox, oy) || 1;
