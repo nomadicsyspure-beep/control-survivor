@@ -10,7 +10,9 @@ import { DIFFS, atkMul, hpMul, skillCdMul, skillDmgMul, type Save } from './save
 // 타격감: 히트스톱 · 화면 흔들림 · 하얀 번쩍임 · 밀려남 · 경직 · 찌그러짐 · 불꽃 · 마무리 타는 속도선과 화면 당김.
 
 /** 조작: one 한 손 자동 · two 두 손 버튼 · gesture 제스처 · pilot 자동 이동 + 스킬 버튼 */
-export type PlayMode = 'one' | 'two' | 'gesture' | 'pilot';
+export type PlayMode = 'one' | 'two' | 'gesture' | 'pilot' | 'dodge';
+/** 휙 회피 모드: 회피 쿨타임(초) */
+const DODGE_CD = 1;
 /** 판 종류: 도파민(3분 동안 몰려오는 몹 쓸어 담기) / 도전(웨이브 + 5웨이브마다 보스, 난이도) */
 export type RunKind = 'horde' | 'challenge';
 export interface GameOpts {
@@ -204,6 +206,8 @@ export class Game {
   private chainT = 0;
   private pendingG: Gesture | null = null;
   private isSlide = false;
+  /** 휙 회피 모드: 다음 회피까지 */
+  private dodgeCd = 0;
   private slideHits = new Set<Enemy>();
   private cast: { id: SkillId; t: number; phase: number; hits: number; next: number; target: Enemy | null; sx: number; sy: number; ex: number; ey: number } | null = null;
   /** 필살기 연출: 종류, 남은 시간, 처음 길이 */
@@ -261,7 +265,7 @@ export class Game {
     this.ctx = this.canvas.getContext('2d')!;
     this.joy = new Joystick(host);
     this.joy.leftOnly = mode === 'two';
-    this.joy.gestures = mode === 'gesture';
+    this.joy.gestures = mode === 'gesture' || mode === 'dodge';
     for (const a of ['idle', 'walk', 'run', 'punch', 'jump'] as HeroAction[]) void loadSheet(a).then((s) => (this.sheets[a] = s));
     this.resize();
     window.addEventListener('resize', this.resize);
@@ -592,6 +596,20 @@ export class Game {
     this.press.attack = this.press.dash = this.press.wave = false;
     this.press.spin = this.press.rush = this.press.slam = this.press.ult = false;
 
+    // 휙 회피 모드: 스킬은 다 자동, 휙이면 슬라이딩 회피 (1초 쿨타임, 필살기 빼고 기술 중에도 끊고 피한다)
+    if (this.mode === 'dodge') {
+      this.dodgeCd -= dt;
+      for (const g of this.joy.takeGestures()) {
+        if (g.type !== 'flick') continue;
+        if (this.dodgeCd > 0 || this.dashT > 0 || this.cast?.id === 'ult') {
+          if (this.dodgeCd > 0) this.text(p.x, p.y - 64, `회피 ${this.dodgeCd.toFixed(1)}초`, '#9aa4b8', 11);
+          continue;
+        }
+        if (this.cast) this.cast = null;
+        this.dodgeCd = DODGE_CD;
+        this.startSlide(g.dx, g.dy);
+      }
+    }
     // 제스처: 기술·슬라이딩 중에 들어온 것은 끝나고 바로 이어서 (마지막 하나만)
     if (this.mode === 'gesture') {
       for (const g of this.joy.takeGestures()) this.pendingG = g;
@@ -712,7 +730,7 @@ export class Game {
     // 장풍: 한 손 = 조금 먼 적에게 가끔 자동, 두 손 = 버튼
     if (this.waveCd <= 0) {
       const far = this.nearest(380);
-      const autoGo = (this.mode === 'one' || this.mode === 'pilot') && far && Math.hypot(far.x - p.x, far.y - p.y) > 110;
+      const autoGo = (this.mode === 'one' || this.mode === 'pilot' || this.mode === 'dodge') && far && Math.hypot(far.x - p.x, far.y - p.y) > 110;
       if (autoGo || wantWave) {
         this.waveCd = two ? WAVE_CD_MANUAL : WAVE_CD_AUTO;
         let ax = p.fx;
@@ -2021,7 +2039,7 @@ export class Game {
       const left = Math.max(0, Math.ceil(HORDE_SEC - this.time));
       ctx.fillText(`도파민 · 남은 ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')} · 처치 ${this.kills}`, 12, top + 32);
     } else {
-      const ctrl = this.mode === 'two' ? ' · 두 손' : this.mode === 'gesture' ? ' · 제스처' : this.mode === 'pilot' ? ' · 자동 이동' : ' · 자동';
+      const ctrl = this.mode === 'two' ? ' · 두 손' : this.mode === 'gesture' ? ' · 제스처' : this.mode === 'pilot' ? ' · 자동 이동' : this.mode === 'dodge' ? ' · 휙 회피' : ' · 자동';
       ctx.fillText(`도전 ${DIFFS[this.diff].name} · WAVE ${this.wave} · 처치 ${this.kills}${ctrl}`, 12, top + 32);
     }
     ctx.fillStyle = '#ffd23f';
@@ -2048,7 +2066,7 @@ export class Game {
       ctx.globalAlpha = 1;
     }
     // 스킬 쿨타임 (한 손 모드: 아래 가운데에 작은 원)
-    if (this.mode === 'one' || this.mode === 'gesture') {
+    if (this.mode === 'one' || this.mode === 'gesture' || this.mode === 'dodge') {
       const list = HUD_SKILLS[this.mode === 'gesture' ? 'gesture' : 'one'];
       const n = list.length;
       const gap = 52;
@@ -2078,15 +2096,30 @@ export class Game {
         ctx.font = '800 10px system-ui, sans-serif';
         ctx.fillText(SKILLS[id].short, x, by + 4);
       });
-      if (this.mode === 'gesture' && this.time < 10) {
+      // 휙 회피 모드: 스킬 줄 위에 회피 게이지
+      if (this.mode === 'dodge') {
+        const k = Math.max(0, this.dodgeCd / DODGE_CD);
+        const w = 120;
+        const x = this.w / 2 - w / 2;
+        const y = by - 34;
+        ctx.fillStyle = 'rgba(0,0,0,0.5)';
+        ctx.fillRect(x, y, w, 8);
+        ctx.fillStyle = k <= 0 ? '#8fd3ff' : 'rgba(143,211,255,0.45)';
+        ctx.fillRect(x, y, w * (1 - k), 8);
+        ctx.fillStyle = k <= 0 ? '#8fd3ff' : '#9aa4b8';
+        ctx.font = '800 10px system-ui, sans-serif';
+        ctx.fillText(k <= 0 ? '휙 = 회피 준비!' : '회피 충전 중', this.w / 2, y - 4);
+      }
+      if ((this.mode === 'gesture' || this.mode === 'dodge') && this.time < 10) {
         ctx.globalAlpha = Math.min(1, (10 - this.time) / 2);
         ctx.fillStyle = 'rgba(0,0,0,0.55)';
-        const hint = '톡 회오리 · 휙 슬라이딩 · 이어 붙이면 연계!';
+        const hint = this.mode === 'dodge' ? '끌기 이동 · 스킬은 자동 · 휙 = 회피 (1초)' : '톡 회오리 · 휙 슬라이딩 · 이어 붙이면 연계!';
         ctx.font = '700 12px system-ui, sans-serif';
         const tw = ctx.measureText(hint).width + 20;
-        ctx.fillRect(this.w / 2 - tw / 2, by - 58, tw, 24);
+        const hy = this.mode === 'dodge' ? by - 80 : by - 58;
+        ctx.fillRect(this.w / 2 - tw / 2, hy, tw, 24);
         ctx.fillStyle = '#fff3d0';
-        ctx.fillText(hint, this.w / 2, by - 41);
+        ctx.fillText(hint, this.w / 2, hy + 17);
         ctx.globalAlpha = 1;
       }
     }
