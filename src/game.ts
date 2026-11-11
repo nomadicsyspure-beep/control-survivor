@@ -91,8 +91,9 @@ const CINE_T: Record<Exclude<UltStyle, 'random'>, number> = { cutin: 0.95, zoom:
 const ULT_FLURRY = 1.25;
 const ULT_GAP = 0.05;
 const ULT_R = 280;
-/** 백열권 순간이동: 시작 자리에서 이 안의 적에게만 옮겨 다닌다 (어지럽지 않게 절반으로) */
-const ULT_HOP_R = 100;
+/** 백열권 순간이동: 가까운 적 ULT_HOP_N마리를 옮겨 다니되 시작 자리에서 이 거리 안에서만 (예전 200의 70%) */
+const ULT_HOP_R = 140;
+const ULT_HOP_N = 8;
 /** 백열권 한 타에 맞는 최대 수 */
 const ULT_MAX_HITS = 120;
 
@@ -1111,14 +1112,22 @@ export class Game {
             e.vy *= 0.3;
           }
           if (inRange.length) {
-            // 순간이동은 시작 자리 가까이(ULT_HOP_R)의 적에게만, 없으면 제자리 둘레에서 살짝
-            const near = inRange.filter((o) => Math.hypot(o.x - c.sx, o.y - c.sy) < ULT_HOP_R);
+            // 시작 자리에서 가까운 적 ULT_HOP_N마리를 돌아가며 순간이동. 맞은 적이 밀려나도
+            // 시작 자리에서 ULT_HOP_R보다 멀리 가지 않게 그 방향으로 잘라서 선다
+            const near = inRange.length <= ULT_HOP_N ? inRange : [...inRange].sort((a1, b1) => Math.hypot(a1.x - c.sx, a1.y - c.sy) - Math.hypot(b1.x - c.sx, b1.y - c.sy)).slice(0, ULT_HOP_N);
             const a = Math.random() * Math.PI * 2;
             this.ghost();
             if (near.length) {
               const e = near[c.hits % near.length];
               p.x = e.x + Math.cos(a) * (e.r + 14);
               p.y = e.y + Math.sin(a) * (e.r + 8);
+              const hx = p.x - c.sx;
+              const hy = p.y - c.sy;
+              const hd = Math.hypot(hx, hy);
+              if (hd > ULT_HOP_R) {
+                p.x = c.sx + (hx / hd) * ULT_HOP_R;
+                p.y = c.sy + (hy / hd) * ULT_HOP_R;
+              }
               const dx = e.x - p.x;
               const dy = e.y - p.y;
               const d = Math.hypot(dx, dy) || 1;
