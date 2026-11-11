@@ -80,6 +80,9 @@ function showChallenge() {
   const auto = el('button', 'btn primary', '자동 (한 손)');
   auto.append(el('small', '', '이동만 · 펀치·스킬 자동 (자동으로도 진행돼요)'));
   auto.addEventListener('click', () => go('one'));
+  const dodge = el('button', 'btn', '휙 회피 (한 손)');
+  dodge.append(el('small', '', '끌기 이동 · 펀치·스킬 전부 자동 · 휙 = 슬라이딩 회피 (1초 쿨타임)'));
+  dodge.addEventListener('click', () => go('dodge'));
   const pilot = el('button', 'btn', '자동 이동 + 스킬 버튼');
   pilot.append(el('small', '', '알아서 쫓아가 때리고 탄도 조금 피함 · 스킬·회피만 버튼 (끌면 그동안 직접 이동)'));
   pilot.addEventListener('click', () => go('pilot'));
@@ -97,6 +100,7 @@ function showChallenge() {
     chips,
     el('div', 'section-title', '조작'),
     auto,
+    dodge,
     pilot,
     ges,
     two,
