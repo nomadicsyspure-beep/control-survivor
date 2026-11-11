@@ -229,6 +229,8 @@ function startGame(mode: PlayMode, run: RunKind, diff: number) {
       for (const { it, b } of btns) {
         if (it.key === 'dash') continue;
         const k = g.cdRatio(it.key);
+        const name = g.slotShort(it.key);
+        if (b.textContent !== name) b.textContent = name;
         b.style.setProperty('--cd', String(k));
         b.classList.toggle('ready', k <= 0);
       }
@@ -259,6 +261,8 @@ function startGame(mode: PlayMode, run: RunKind, diff: number) {
       if (!g.running) return;
       for (const { id, b } of skillBtns) {
         const k = g.cdRatio(id);
+        const name = g.slotShort(id);
+        if (b.textContent !== name) b.textContent = name;
         b.style.setProperty('--cd', String(k));
         b.classList.toggle('ready', k <= 0);
       }

@@ -68,6 +68,35 @@ export const SKILLS = {
   ult: { name: '백열권', short: '필살', cd: 20 },
 } as const;
 export type SkillId = keyof typeof SKILLS;
+/**
+ * 사냥용 스킬 (보스가 없을 때). 멈춰 서서 때리지 않고 달리면서 쓸어 담는 맛.
+ * 같은 칸(버튼·성장)을 쓴다: spin 칸 = 회전 칼날, rush = 관통 연사, slam = 연쇄 번개, ult = 유성우.
+ * 보스가 나오면 위 SKILLS(보스전용)로 저절로 바뀐다.
+ */
+export const HUNT = {
+  spin: { name: '회전 칼날', short: '칼날', cd: 6 },
+  rush: { name: '관통 연사', short: '연사', cd: 2.6 },
+  slam: { name: '연쇄 번개', short: '번개', cd: 4 },
+  ult: { name: '유성우', short: '유성', cd: 14 },
+} as const;
+export type Slot = keyof typeof HUNT;
+export const SLOTS = Object.keys(HUNT) as Slot[];
+/** 회전 칼날: 지속, 개수, 도는 반지름, 같은 적을 다시 베는 간격 */
+const BLADE_T = 4;
+const BLADE_N = 3;
+const BLADE_R = 92;
+const BLADE_GAP = 0.22;
+/** 관통 연사: 발 수, 간격 */
+const PIERCE_N = 6;
+const PIERCE_GAP = 0.07;
+/** 연쇄 번개: 튀는 수, 튀는 거리 */
+const CHAIN_N = 14;
+const CHAIN_JUMP = 160;
+/** 유성우: 개수, 간격, 떨어지는 시간, 폭발 반지름 */
+const METEOR_N = 16;
+const METEOR_GAP = 0.09;
+const METEOR_FALL = 0.32;
+const METEOR_R = 78;
 export const SKILL_IDS = Object.keys(SKILLS) as SkillId[];
 /** 회오리 발차기 반경 */
 const SPIN_R = 120;
@@ -131,10 +160,12 @@ interface Enemy {
   /** 띄우기: 공중 높이와 위로 속도 (어퍼·지진·필살 마무리) */
   z: number;
   vz: number;
+  /** 회전 칼날에 마지막으로 베인 때 */
+  bladeAt: number;
 }
 
 interface Bullet { x: number; y: number; vx: number; vy: number; r: number; dmg: number; life: number; boss: boolean }
-interface Orb { x: number; y: number; vx: number; vy: number; life: number; hit: Set<Enemy> }
+interface Orb { x: number; y: number; vx: number; vy: number; life: number; hit: Set<Enemy>; hunt?: boolean }
 interface Particle { x: number; y: number; vx: number; vy: number; life: number; max: number; color: string; size: number; grav: number }
 interface Text { x: number; y: number; text: string; color: string; size: number; life: number; max: number }
 interface Spr { name: string; x: number; y: number; size: number; life: number; max: number; rot: number }
@@ -245,6 +276,19 @@ export class Game {
   private lastFrame = 0;
   private styleIdx = 0;
 
+  // 사냥 스킬
+  /** 지금 사냥용 스킬을 쓰나 (보스가 없으면 true) */
+  hunt = true;
+  private huntCds: Record<Slot, number> = { spin: 1, rush: 0.5, slam: 1.5, ult: 5 };
+  private bladeT = 0;
+  private bladeA = 0;
+  private pierceN = 0;
+  private pierceT = 0;
+  private meteorN = 0;
+  private meteorT = 0;
+  private meteors: { x: number; y: number; t: number }[] = [];
+  private bolts: { pts: number[]; life: number }[] = [];
+
   // 진행
   private wave = 0;
   private waveT = 0;
@@ -261,7 +305,13 @@ export class Game {
 
   /** 스킬 쿨타임 남은 비율 0~1 (버튼 표시용) */
   cdRatio(id: SkillId) {
+    if (this.hunt && id in HUNT) return Math.max(0, Math.min(1, this.huntCds[id as Slot] / HUNT[id as Slot].cd));
     return Math.max(0, Math.min(1, this.cds[id] / SKILLS[id].cd));
+  }
+
+  /** 버튼에 쓸 짧은 이름 (사냥 / 보스전에 따라) */
+  slotShort(id: SkillId) {
+    return this.hunt && id in HUNT ? HUNT[id as Slot].short : SKILLS[id].short;
   }
 
   readonly mode: PlayMode;
@@ -380,7 +430,7 @@ export class Game {
       kind, x: this.p.x + Math.cos(a) * d, y: this.p.y + Math.sin(a) * d, r: horde && kind !== 'golem' ? r * 0.9 : r, hp: hp * k, maxHp: hp * k,
       speed: horde && kind !== 'golem' ? speed * 0.85 : speed, dmg: dmg * dk,
       vx: 0, vy: 0, flash: 0, stun: 0, poise: horde ? poise * 0.4 : poise, maxPoise: horde ? poise * 0.4 : poise, broken: 0, sq: 0, cd: 1.5 + Math.random() * 1.5, cast: 0, dashT: 0, dx: 0, dy: 0,
-      pat: 0, volN: 0, volT: 0, phase: Math.random() * 6, dead: false, z: 0, vz: 0,
+      pat: 0, volN: 0, volT: 0, phase: Math.random() * 6, dead: false, z: 0, vz: 0, bladeAt: -9,
     });
   }
 
@@ -419,7 +469,16 @@ export class Game {
     for (const g of this.ghosts) g.life -= dt;
     keep(this.ghosts, (g) => g.life > 0);
     if (!this.domainOn) this.domain = Math.max(0, this.domain - 600 * dt);
+    // 보스가 있으면 보스전 스킬, 없으면 사냥 스킬
+    const hunt = !this.enemies.some((e) => !e.dead && e.kind === 'boss');
+    if (hunt !== this.hunt) {
+      this.hunt = hunt;
+      this.bladeT = this.pierceN = this.meteorN = 0;
+      this.banner = hunt ? '사냥 스킬로 전환' : '보스전 스킬로 전환!';
+      this.bannerT = 1.2;
+    }
     this.updatePlayer(dt);
+    this.updateHunt(dt);
     this.updateEnemies(dt);
     this.updateShots(dt);
     this.updateFx(dt);
@@ -604,6 +663,7 @@ export class Game {
     this.waveCd -= dt;
     this.dashCd -= dt;
     for (const id of SKILL_IDS) this.cds[id] = this.tuning.noCd ? 0 : this.cds[id] - dt;
+    for (const id of SLOTS) this.huntCds[id] = this.tuning.noCd ? 0 : this.huntCds[id] - dt;
     // 자동 이동 (pilot): 화면을 끌면 그동안은 직접
     const mv = this.autoMoveOn && !this.joy.active && !this.joy.keyMoving ? this.autoMove(dt) : this.joy.move;
     const ml = Math.hypot(mv.x, mv.y);
@@ -656,14 +716,23 @@ export class Game {
     }
     // 제스처 모드: 톡 = 회오리 · 휙 = 슬라이딩, 이어 붙이면 연계 기술
     if (this.mode === 'gesture') {
+      if (this.hunt) for (const id of SLOTS) if (this.huntCds[id] <= 0 && this.autoHunt(id)) this.startHunt(id);
       if (this.pendingG && this.dashT <= 0) {
         const g = this.pendingG;
         this.pendingG = null;
         if (this.onGesture(g)) return;
       }
     } else {
+      // 사냥: 같은 칸을 사냥 스킬로 (멈추지 않고 바로 나간다)
+      if (this.hunt) {
+        for (const id of ['ult', 'slam', 'spin', 'rush'] as Slot[]) {
+          if (this.huntCds[id] > 0) continue;
+          if (manual ? wantSkill[id] : this.autoHunt(id)) this.startHunt(id);
+        }
+      }
       // 스킬 발동: 두 손 = 버튼, 한 손 = 조건이 맞으면 자동 (필살기 → 지진 → 회오리 → 어퍼 순)
       for (const id of ['ult', 'slam', 'spin', 'rush'] as SkillId[]) {
+        if (this.hunt) break;
         if (this.cds[id] > 0 || this.dashT > 0) continue;
         if (manual ? wantSkill[id] : this.autoSkill(id)) {
           this.startCast(id);
@@ -778,7 +847,7 @@ export class Game {
     }
 
     // 이동 (때리는 중엔 느리게)
-    const slowK = this.atk ? 0.35 : 1;
+    const slowK = this.atk ? (this.hunt ? 0.85 : 0.35) : 1;
     if (ml > 0.05) {
       p.x += mv.x * p.speed * slowK * dt;
       p.y += mv.y * p.speed * slowK * dt;
@@ -908,6 +977,168 @@ export class Game {
     }
     this.ring(p.x, p.y - 22, 26, 0.25, '#8fd3ff');
     sfx.wave();
+  }
+
+  // ---------------- 사냥 스킬 ----------------
+
+  /** 사냥 스킬 자동 조건 (한 손 · 휙 회피 · 제스처) */
+  private autoHunt(id: Slot) {
+    if (id === 'ult') return this.countNear(360).n >= 10;
+    if (id === 'slam') return this.countNear(300).n >= 4;
+    if (id === 'spin') return this.bladeT <= 0 && this.countNear(160).n >= 3;
+    return this.pierceN <= 0 && !!this.nearest(400);
+  }
+
+  private startHunt(id: Slot) {
+    const p = this.p;
+    this.huntCds[id] = HUNT[id].cd * skillCdMul(this.save, id);
+    if (id === 'spin') {
+      this.bladeT = BLADE_T;
+      sfx.whoosh();
+    } else if (id === 'rush') {
+      this.pierceN = PIERCE_N;
+      this.pierceT = 0;
+    } else if (id === 'slam') {
+      this.chainBolt();
+    } else {
+      this.meteorN = METEOR_N;
+      this.meteorT = 0;
+      this.shake = Math.max(this.shake, 4 * this.tuning.shake);
+      sfx.ultCharge();
+    }
+    this.text(p.x, p.y - 70, HUNT[id].name, id === 'ult' ? '#ffb347' : '#bfe8ff', id === 'ult' ? 18 : 13);
+  }
+
+  /** 사냥용 가벼운 타격: 히트스톱 없이, 파티클 조금. 몹이 많아도 가볍게 */
+  private lightHit(e: Enemy, dmg: number, ux: number, uy: number, knock: number, slot: Slot) {
+    const crit = Math.random() < 0.12;
+    const v = Math.round(dmg * atkMul(this.save) * skillDmgMul(this.save, slot) * (e.broken > 0 ? 1.5 : 1) * (crit ? 2 : 1) * (0.9 + Math.random() * 0.2));
+    e.hp -= v;
+    e.flash = 0.07;
+    e.sq = 0.7;
+    const kk = e.kind === 'boss' ? 0.25 : e.kind === 'golem' ? 0.55 : 1;
+    e.vx += ux * knock * this.tuning.knock * kk;
+    e.vy += uy * knock * this.tuning.knock * kk;
+    e.stun = Math.max(e.stun, 0.08);
+    if (e.kind !== 'boss') e.cast = 0;
+    if (crit || e.maxHp >= 40) this.text(e.x, e.y - e.r * 1.6, String(v), crit ? '#ffb347' : '#ffffff', crit ? 17 : 12);
+    for (let i = 0; i < 2; i++) {
+      const a = Math.atan2(uy, ux) + (Math.random() - 0.5) * 1.4;
+      this.part(e.x, e.y - e.r * 0.6, Math.cos(a) * 200, Math.sin(a) * 200 - 40, 0.25, i ? '#ffe066' : '#ffffff', 2.5, 400);
+    }
+    this.hits++;
+    this.hitT = 1.6;
+    this.bestCombo = Math.max(this.bestCombo, this.hits);
+    if (e.hp <= 0) this.kill(e, ux, uy);
+  }
+
+  /** 연쇄 번개: 가장 가까운 적에서 시작해 옆 적으로 튄다 */
+  private chainBolt() {
+    const p = this.p;
+    let cur = this.nearest(300);
+    if (!cur) return;
+    const hit = new Set<Enemy>();
+    const pts = [p.x, p.y - 30];
+    for (let i = 0; i < CHAIN_N && cur; i++) {
+      hit.add(cur);
+      pts.push(cur.x, cur.y - cur.r * 0.6);
+      const px = pts[pts.length - 4];
+      const py = pts[pts.length - 3];
+      const d = Math.hypot(cur.x - px, cur.y - py) || 1;
+      this.lightHit(cur, 22 - i * 0.6, (cur.x - px) / d, (cur.y - py) / d, 60, 'slam');
+      let next: Enemy | null = null;
+      let bd = CHAIN_JUMP;
+      for (const e of this.enemies) {
+        if (e.dead || hit.has(e)) continue;
+        const dd = Math.hypot(e.x - cur.x, e.y - cur.y);
+        if (dd < bd) {
+          bd = dd;
+          next = e;
+        }
+      }
+      cur = next;
+    }
+    this.bolts.push({ pts, life: 0.22 });
+    this.flashT = Math.max(this.flashT, 0.04);
+    this.shake = Math.max(this.shake, 3 * this.tuning.shake);
+    sfx.hit(2);
+  }
+
+  private updateHunt(dt: number) {
+    const p = this.p;
+    for (const b of this.bolts) b.life -= dt;
+    keep(this.bolts, (b) => b.life > 0);
+    // 떨어지는 유성: 땅에 닿으면 펑
+    for (const m of this.meteors) {
+      m.t -= dt;
+      if (m.t > 0) continue;
+      for (const e of this.enemies) {
+        if (e.dead) continue;
+        const dx = e.x - m.x;
+        const dy = e.y - m.y;
+        const d = Math.hypot(dx, dy) || 1;
+        if (d - e.r > METEOR_R) continue;
+        this.lightHit(e, 30, dx / d, dy / d, 260, 'ult');
+      }
+      this.ring(m.x, m.y, METEOR_R, 0.3, '#ffb347');
+      this.sprs.push({ name: 'star-burst', x: m.x, y: m.y - 10, size: 90, life: 0.2, max: 0.2, rot: Math.random() * 6 });
+      for (let i = 0; i < 6; i++) {
+        const a = Math.random() * Math.PI * 2;
+        this.part(m.x, m.y, Math.cos(a) * 240, Math.sin(a) * 160 - 120, 0.4, i % 2 ? '#ffb347' : '#ffe066', 4, 500);
+      }
+      this.shake = Math.max(this.shake, 4 * this.tuning.shake);
+      sfx.hit(2);
+    }
+    keep(this.meteors, (m) => m.t > 0);
+    if (!this.hunt) return;
+    // 회전 칼날: 주인공 둘레를 돌며 닿는 적을 벤다
+    if (this.bladeT > 0) {
+      this.bladeT -= dt;
+      this.bladeA += dt * 9;
+      for (let i = 0; i < BLADE_N; i++) {
+        const a = this.bladeA + (i * Math.PI * 2) / BLADE_N;
+        const bx = p.x + Math.cos(a) * BLADE_R;
+        const by = p.y - 14 + Math.sin(a) * BLADE_R * 0.8;
+        for (const e of this.enemies) {
+          if (e.dead || this.time - e.bladeAt < BLADE_GAP) continue;
+          if (Math.hypot(e.x - bx, e.y - e.r * 0.5 - by) > e.r + 22) continue;
+          e.bladeAt = this.time;
+          this.lightHit(e, 11, Math.cos(a + 1.57), Math.sin(a + 1.57), 180, 'spin');
+        }
+      }
+    }
+    // 관통 연사: 가까운 적 쪽으로 차례로 (조금씩 퍼지게)
+    if (this.pierceN > 0) {
+      this.pierceT -= dt;
+      if (this.pierceT <= 0) {
+        this.pierceT = PIERCE_GAP;
+        this.pierceN--;
+        const far = this.nearest(420);
+        const base = far ? Math.atan2(far.y - p.y, far.x - p.x) : Math.atan2(p.fy, p.fx);
+        const a = base + (Math.random() - 0.5) * 0.5;
+        this.orbs.push({ x: p.x + Math.cos(a) * 18, y: p.y - 22 + Math.sin(a) * 18, vx: Math.cos(a) * 620, vy: Math.sin(a) * 620, life: 0.9, hit: new Set(), hunt: true });
+        sfx.wave();
+      }
+    }
+    // 유성우: 화면 안 적 위로 하나씩
+    if (this.meteorN > 0) {
+      this.meteorT -= dt;
+      if (this.meteorT <= 0) {
+        this.meteorT = METEOR_GAP;
+        this.meteorN--;
+        let tx = p.x + (Math.random() - 0.5) * 400;
+        let ty = p.y + (Math.random() - 0.5) * 400;
+        for (let k = 0; k < 6; k++) {
+          const e = this.enemies[(Math.random() * this.enemies.length) | 0];
+          if (e && !e.dead && Math.hypot(e.x - p.x, e.y - p.y) < 380) {
+            tx = e.x;
+            ty = e.y;
+            break;
+          }
+        }
+        this.meteors.push({ x: tx, y: ty, t: METEOR_FALL });
+      }
+    }
   }
 
   private startCast(id: SkillId, dirX = 0, dirY = 0) {
@@ -1209,7 +1440,7 @@ export class Game {
       this.damage(e, st.dmg, dx / d, dy / d, st.knock * t.knock, st.stun, st.poise, step + 1, hx, hy);
     }
     if (any) {
-      this.stop = Math.max(this.stop, st.stop * t.hitstop);
+      this.stop = Math.max(this.stop, st.stop * t.hitstop * (this.hunt ? 0.35 : 1));
       this.shake = Math.max(this.shake, st.shake * t.shake);
       if (step === 2) {
         this.zoom = 1;
@@ -1527,9 +1758,13 @@ export class Game {
       if (Math.random() < 0.8) this.part(o.x, o.y, -o.vx * 0.1, -o.vy * 0.1, 0.25, '#bfe8ff', 3, 0);
       for (const e of this.enemies) {
         if (e.dead || o.hit.has(e)) continue;
-        if (Math.hypot(e.x - o.x, e.y - e.r * 0.5 - o.y) > e.r + 18) continue;
+        if (Math.hypot(e.x - o.x, e.y - e.r * 0.5 - o.y) > e.r + (o.hunt ? 26 : 18)) continue;
         o.hit.add(e);
         const sp = Math.hypot(o.vx, o.vy) || 1;
+        if (o.hunt) {
+          this.lightHit(e, 14, o.vx / sp, o.vy / sp, 160, 'rush');
+          continue;
+        }
         this.damage(e, WAVE_DMG, o.vx / sp, o.vy / sp, 200 * this.tuning.knock, 0.15, 8, 1, o.x, o.y);
         this.stop = Math.max(this.stop, 0.03 * this.tuning.hitstop);
         this.shake = Math.max(this.shake, 2 * this.tuning.shake);
@@ -1656,6 +1891,75 @@ export class Game {
       ctx.fillStyle = g;
       ctx.beginPath();
       ctx.arc(o.x, o.y, 16, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // 사냥 스킬
+    if (this.bladeT > 0) {
+      const p = this.p;
+      ctx.fillStyle = '#e8f6ff';
+      ctx.strokeStyle = 'rgba(143,211,255,0.5)';
+      ctx.lineWidth = 6;
+      ctx.beginPath();
+      ctx.ellipse(p.x, p.y - 14, BLADE_R, BLADE_R * 0.8, 0, 0, Math.PI * 2);
+      ctx.globalAlpha = 0.25;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      for (let i = 0; i < BLADE_N; i++) {
+        const a = this.bladeA + (i * Math.PI * 2) / BLADE_N;
+        const bx = p.x + Math.cos(a) * BLADE_R;
+        const by = p.y - 14 + Math.sin(a) * BLADE_R * 0.8;
+        ctx.save();
+        ctx.translate(bx, by);
+        ctx.rotate(this.bladeA * 3);
+        ctx.beginPath();
+        ctx.moveTo(0, -16);
+        ctx.lineTo(5, 0);
+        ctx.lineTo(0, 16);
+        ctx.lineTo(-5, 0);
+        ctx.closePath();
+        ctx.fill();
+        ctx.rotate(Math.PI / 2);
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+    if (this.bolts.length) {
+      ctx.lineCap = 'round';
+      for (const b of this.bolts) {
+        ctx.globalAlpha = Math.min(1, b.life / 0.12);
+        for (const [w, c] of [[7, 'rgba(120,190,255,0.6)'], [2.5, '#ffffff']] as const) {
+          ctx.lineWidth = w;
+          ctx.strokeStyle = c;
+          ctx.beginPath();
+          ctx.moveTo(b.pts[0], b.pts[1]);
+          for (let i = 2; i < b.pts.length; i += 2) {
+            const mx = (b.pts[i - 2] + b.pts[i]) / 2 + ((i * 37) % 13) - 6;
+            const my = (b.pts[i - 1] + b.pts[i + 1]) / 2 + ((i * 53) % 13) - 6;
+            ctx.lineTo(mx, my);
+            ctx.lineTo(b.pts[i], b.pts[i + 1]);
+          }
+          ctx.stroke();
+        }
+      }
+      ctx.globalAlpha = 1;
+    }
+    for (const m of this.meteors) {
+      const k = m.t / METEOR_FALL;
+      ctx.fillStyle = 'rgba(255,120,40,0.25)';
+      ctx.beginPath();
+      ctx.ellipse(m.x, m.y, METEOR_R * (1 - k * 0.5), METEOR_R * 0.45 * (1 - k * 0.5), 0, 0, Math.PI * 2);
+      ctx.fill();
+      const fy = m.y - k * 320;
+      const fx = m.x + k * 120;
+      ctx.strokeStyle = 'rgba(255,179,71,0.7)';
+      ctx.lineWidth = 8;
+      ctx.beginPath();
+      ctx.moveTo(fx + 40, fy - 70);
+      ctx.lineTo(fx, fy);
+      ctx.stroke();
+      ctx.fillStyle = '#fff3d0';
+      ctx.beginPath();
+      ctx.arc(fx, fy, 9, 0, Math.PI * 2);
       ctx.fill();
     }
     // 이펙트
@@ -2150,7 +2454,7 @@ export class Game {
     }
     // 스킬 쿨타임 (한 손 모드: 아래 가운데에 작은 원)
     if (this.mode === 'one' || this.mode === 'gesture' || this.mode === 'dodge') {
-      const list = HUD_SKILLS[this.mode === 'gesture' ? 'gesture' : 'one'];
+      const list: SkillId[] = this.hunt ? ['spin', 'rush', 'slam', 'ult'] : HUD_SKILLS[this.mode === 'gesture' ? 'gesture' : 'one'];
       const n = list.length;
       const gap = 52;
       const by = this.h - 34 - this.safeBottom;
@@ -2177,7 +2481,7 @@ export class Game {
         ctx.fillStyle = '#fff';
         ctx.textAlign = 'center';
         ctx.font = '800 10px system-ui, sans-serif';
-        ctx.fillText(SKILLS[id].short, x, by + 4);
+        ctx.fillText(this.slotShort(id), x, by + 4);
       });
       // 휙 회피 모드: 스킬 줄 위에 회피 게이지
       if (this.mode === 'dodge') {
