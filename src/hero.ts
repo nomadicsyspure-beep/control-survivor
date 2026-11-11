@@ -8,6 +8,19 @@ import punchUrl from './assets/hero/hero_punch.png';
 import jumpUrl from './assets/hero/hero_jump.png';
 import waveUrl from './assets/hero/hero_wave.png';
 
+// 다른 캐릭터 (261103melbourne mannequin3d: 남자·여자 마네킹). 달리기 시트 하나뿐이라 동작마다 그 프레임을 골라 썼다
+const SKIN_URLS = import.meta.glob('./assets/{male,female}/*.png', { eager: true, import: 'default' }) as Record<string, string>;
+
+export type Skin = 'hero' | 'male' | 'female';
+export const SKINS: [Skin, string][] = [['hero', '기본 주인공'], ['male', '마네킹 (남)'], ['female', '마네킹 (여)']];
+let skin: Skin = 'hero';
+/** 캐릭터 바꾸기 (설정). 시트는 다시 불러온다 */
+export function setSkin(s: Skin) {
+  if (s === skin) return;
+  skin = s;
+  sheets.clear();
+}
+
 export const CELL = 96;
 export const DIRS = ['S', 'SE', 'E', 'NE', 'N', 'NW', 'W', 'SW'] as const;
 export const DIR_NAMES = ['정면', '오른쪽 앞', '오른쪽', '오른쪽 뒤', '뒤', '왼쪽 뒤', '왼쪽', '왼쪽 앞'];
@@ -41,6 +54,10 @@ export interface Sheet {
 
 const sheets = new Map<HeroAction, Promise<Sheet>>();
 
+function urlOf(def: ActionDef) {
+  return skin === 'hero' ? def.url : (SKIN_URLS[`./assets/${skin}/${def.id}.png`] ?? def.url);
+}
+
 export function loadSheet(id: HeroAction): Promise<Sheet> {
   let p = sheets.get(id);
   if (!p) {
@@ -49,7 +66,7 @@ export function loadSheet(id: HeroAction): Promise<Sheet> {
       const img = new Image();
       img.onload = () => resolve({ img, frames: Math.max(1, Math.round(img.naturalWidth / CELL)) });
       img.onerror = reject;
-      img.src = def.url;
+      img.src = urlOf(def);
     });
     sheets.set(id, p);
   }

@@ -1,4 +1,5 @@
 import './style.css';
+import { setSkin } from './hero';
 import { Game, SKILLS, type GameResult, type PlayMode, type RunKind, type SkillId } from './game';
 import { loadTuning, openSettings, saveTuning } from './settings';
 import { unlockAudio } from './sfx';
@@ -13,6 +14,7 @@ import {
 
 const root = document.getElementById('root')!;
 const tuning = loadTuning();
+setSkin(tuning.skin);
 const save = loadSave();
 /** 마지막에 고른 도전 조작·난이도 (다시 하기용) */
 let lastControl: PlayMode = 'one';

@@ -1,4 +1,4 @@
-import { ACTIONS, CELL, DIR_NAMES, drawFrame, loadSheet, type HeroAction } from './hero';
+import { ACTIONS, CELL, DIR_NAMES, drawFrame, loadSheet, setSkin, SKINS, type HeroAction, type Skin } from './hero';
 
 // 설정: 손맛 수치(히트스톱·화면 흔들림·밀려남)와 캐릭터 보기. 수치는 이 기기에 저장한다.
 
@@ -11,6 +11,8 @@ export const ULT_STYLES: [UltStyle, string][] = [
 export interface Tuning {
   /** 필살기 연출 */
   ultStyle: UltStyle;
+  /** 캐릭터 */
+  skin: Skin;
   /** 테스트: 스킬·필살기 쿨타임 없애기 */
   noCd: boolean;
   /** 도움: 적 탄 느리게 (×0.75) */
@@ -30,7 +32,7 @@ export interface Tuning {
 }
 
 const KEY = 'control-survivor.settings.v1';
-export const DEFAULT_TUNING: Tuning = { ultStyle: 'cutin', noCd: false, slowBullets: false, autoMove: false, lite: false, showFps: false, hitstop: 1, shake: 1, knock: 1 };
+export const DEFAULT_TUNING: Tuning = { ultStyle: 'cutin', skin: 'hero', noCd: false, slowBullets: false, autoMove: false, lite: false, showFps: false, hitstop: 1, shake: 1, knock: 1 };
 
 export function loadTuning(): Tuning {
   try {
@@ -151,6 +153,19 @@ function slider(name: string, value: number, onChange: (v: number) => void) {
 export function openSettings(tuning: Tuning, onClose: () => void) {
   const overlay = el('div', 'overlay');
   const modal = el('div', 'modal');
+  // 캐릭터 고르기
+  setSkin(tuning.skin);
+  const skinRow = el('div', 'viewer-acts');
+  for (const [id, name] of SKINS) {
+    const b = el('button', 'chip' + (tuning.skin === id ? ' on' : ''), name);
+    b.addEventListener('click', () => {
+      tuning.skin = id;
+      saveTuning(tuning);
+      setSkin(id);
+      for (const x of skinRow.children) x.classList.toggle('on', x === b);
+    });
+    skinRow.append(b);
+  }
   const viewer = heroViewer();
   const tune = el('div', 'tune');
   tune.append(
@@ -216,7 +231,7 @@ export function openSettings(tuning: Tuning, onClose: () => void) {
     onClose();
   };
   close.addEventListener('click', done);
-  modal.append(el('div', 'modal-title', '⚙️ 설정'), el('div', 'section-title', '캐릭터'), viewer.box, ult, tune, close);
+  modal.append(el('div', 'modal-title', '⚙️ 설정'), el('div', 'section-title', '캐릭터'), skinRow, viewer.box, ult, tune, close);
   overlay.append(modal);
   document.body.append(overlay);
 }
