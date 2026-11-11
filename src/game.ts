@@ -208,6 +208,8 @@ export class Game {
   private isSlide = false;
   /** 휙 회피 모드: 다음 회피까지 */
   private dodgeCd = 0;
+  /** 자동 이동: 켜져 있으면 손을 떼고 있는 동안 알아서 몹을 쫓아가 때리고 탄을 조금 피한다 (끌면 그동안 직접) */
+  autoMoveOn = false;
   private slideHits = new Set<Enemy>();
   private cast: { id: SkillId; t: number; phase: number; hits: number; next: number; target: Enemy | null; sx: number; sy: number; ex: number; ey: number } | null = null;
   /** 필살기 연출: 종류, 남은 시간, 처음 길이 */
@@ -254,6 +256,7 @@ export class Game {
 
   constructor(host: HTMLElement, opts: GameOpts, private readonly tuning: Tuning, private readonly onEnd: (r: GameResult) => void) {
     this.mode = opts.control;
+    this.autoMoveOn = opts.control === 'pilot' || this.tuning.autoMove;
     this.run = opts.run;
     this.diff = opts.diff;
     this.save = opts.save;
@@ -574,7 +577,7 @@ export class Game {
     this.dashCd -= dt;
     for (const id of SKILL_IDS) this.cds[id] = this.tuning.noCd ? 0 : this.cds[id] - dt;
     // 자동 이동 (pilot): 화면을 끌면 그동안은 직접
-    const mv = this.mode === 'pilot' && !this.joy.active && !this.joy.keyMoving ? this.autoMove(dt) : this.joy.move;
+    const mv = this.autoMoveOn && !this.joy.active && !this.joy.keyMoving ? this.autoMove(dt) : this.joy.move;
     const ml = Math.hypot(mv.x, mv.y);
     p.moving = ml;
 
@@ -2050,9 +2053,9 @@ export class Game {
       ctx.font = `900 ${26 + Math.min(14, this.hits)}px system-ui, sans-serif`;
       ctx.lineWidth = 4;
       ctx.strokeStyle = 'rgba(0,0,0,0.6)';
-      ctx.strokeText(`${this.hits} HIT`, this.w - 16, top + 70);
+      ctx.strokeText(`${this.hits} HIT`, this.w - 16, top + 112);
       ctx.fillStyle = '#ffd23f';
-      ctx.fillText(`${this.hits} HIT`, this.w - 16, top + 70);
+      ctx.fillText(`${this.hits} HIT`, this.w - 16, top + 112);
     }
     if (this.bannerT > 0) {
       ctx.textAlign = 'center';

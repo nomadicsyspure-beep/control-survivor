@@ -1,6 +1,6 @@
 import './style.css';
 import { Game, SKILLS, type GameResult, type PlayMode, type RunKind, type SkillId } from './game';
-import { loadTuning, openSettings } from './settings';
+import { loadTuning, openSettings, saveTuning } from './settings';
 import { unlockAudio } from './sfx';
 import {
   DIFFS, SKILL_UP_NAMES, STAT_NAMES, loadSave, skillCost, statCost, writeSave, type SkillUp, type StatUp,
@@ -37,8 +37,8 @@ function showTitle() {
   const box = el('div', 'title-screen');
   const purse = el('div', 'purse', `🪙 ${save.gold}   ⭐ ${save.stars}`);
   const horde = el('button', 'btn primary big', '🔥 도파민 모드');
-  horde.append(el('small', '', '3분 동안 몰려오는 몹을 쓸어 담기 · 한 손 자동 · 골드'));
-  horde.addEventListener('click', () => startGame('one', 'horde', 0));
+  horde.append(el('small', '', '3분 동안 몰려오는 몹을 쓸어 담기 · 스킬 자동 · 휙 = 회피 · 골드'));
+  horde.addEventListener('click', () => startGame('dodge', 'horde', 0));
   const chal = el('button', 'btn big danger', '⚔️ 도전 모드');
   chal.append(el('small', '', '탄막·보스 · 조작과 난이도 고르기 · 골드 + 별'));
   chal.addEventListener('click', () => showChallenge());
@@ -187,7 +187,22 @@ function startGame(mode: PlayMode, run: RunKind, diff: number) {
   });
   const quit = el('button', 'icon-btn quit-btn', '✕');
   quit.addEventListener('click', () => showTitle());
-  root.append(pause, quit);
+  // 자동 이동 켜고 끄기 (모든 모드)
+  const autoBtn = el('button', 'auto-move-btn');
+  const paintAuto = () => {
+    autoBtn.textContent = `자동 이동 ${g.autoMoveOn ? 'ON' : 'OFF'}`;
+    autoBtn.classList.toggle('on', g.autoMoveOn);
+  };
+  autoBtn.addEventListener('click', () => {
+    g.autoMoveOn = !g.autoMoveOn;
+    if (mode !== 'pilot') {
+      tuning.autoMove = g.autoMoveOn;
+      saveTuning(tuning);
+    }
+    paintAuto();
+  });
+  paintAuto();
+  root.append(pause, quit, autoBtn);
   // 자동 이동 모드: 아래 스킬 줄 (엄지로 누르기 좋게)
   if (mode === 'pilot') {
     const bar = el('div', 'skill-bar');

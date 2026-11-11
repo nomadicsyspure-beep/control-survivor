@@ -15,6 +15,8 @@ export interface Tuning {
   noCd: boolean;
   /** 도움: 적 탄 느리게 (×0.75) */
   slowBullets: boolean;
+  /** 자동 이동 켜 두기 (게임 안 버튼으로 바꾼다. 자동 이동 + 스킬 버튼 조작은 늘 켜고 시작) */
+  autoMove: boolean;
   /** 맞힌 순간 멈춤 배율 */
   hitstop: number;
   /** 화면 흔들림 배율 */
@@ -24,7 +26,7 @@ export interface Tuning {
 }
 
 const KEY = 'control-survivor.settings.v1';
-export const DEFAULT_TUNING: Tuning = { ultStyle: 'cutin', noCd: false, slowBullets: false, hitstop: 1, shake: 1, knock: 1 };
+export const DEFAULT_TUNING: Tuning = { ultStyle: 'cutin', noCd: false, slowBullets: false, autoMove: false, hitstop: 1, shake: 1, knock: 1 };
 
 export function loadTuning(): Tuning {
   try {
