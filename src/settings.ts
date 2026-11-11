@@ -17,6 +17,10 @@ export interface Tuning {
   slowBullets: boolean;
   /** 자동 이동 켜 두기 (게임 안 버튼으로 바꾼다. 자동 이동 + 스킬 버튼 조작은 늘 켜고 시작) */
   autoMove: boolean;
+  /** 가볍게 모드: 해상도 1배, 파티클 적게 (느린 폰용) */
+  lite: boolean;
+  /** 성능 표시 (FPS · 프레임 ms) */
+  showFps: boolean;
   /** 맞힌 순간 멈춤 배율 */
   hitstop: number;
   /** 화면 흔들림 배율 */
@@ -26,7 +30,7 @@ export interface Tuning {
 }
 
 const KEY = 'control-survivor.settings.v1';
-export const DEFAULT_TUNING: Tuning = { ultStyle: 'cutin', noCd: false, slowBullets: false, autoMove: false, hitstop: 1, shake: 1, knock: 1 };
+export const DEFAULT_TUNING: Tuning = { ultStyle: 'cutin', noCd: false, slowBullets: false, autoMove: false, lite: false, showFps: false, hitstop: 1, shake: 1, knock: 1 };
 
 export function loadTuning(): Tuning {
   try {
@@ -190,7 +194,21 @@ export function openSettings(tuning: Tuning, onClose: () => void) {
     slow.classList.toggle('on', tuning.slowBullets);
     slow.textContent = `도움: 적 탄 느리게 ${tuning.slowBullets ? 'ON' : 'OFF'}`;
   });
-  ult.append(el('div', 'section-title', '필살기 연출 (백열권)'), chips, noCd, el('div', 'section-title', '도움'), slow);
+  const toggle = (key: 'lite' | 'showFps', label: string) => {
+    const b = el('button', 'chip' + (tuning[key] ? ' on' : ''), `${label} ${tuning[key] ? 'ON' : 'OFF'}`);
+    b.addEventListener('click', () => {
+      tuning[key] = !tuning[key];
+      saveTuning(tuning);
+      b.classList.toggle('on', tuning[key]);
+      b.textContent = `${label} ${tuning[key] ? 'ON' : 'OFF'}`;
+    });
+    return b;
+  };
+  ult.append(
+    el('div', 'section-title', '필살기 연출 (백열권)'), chips, noCd,
+    el('div', 'section-title', '도움'), slow,
+    el('div', 'section-title', '성능 (가볍게 모드는 다음 판부터)'), toggle('lite', '가볍게 모드'), toggle('showFps', '성능 표시'),
+  );
   const close = el('button', 'btn primary', '닫기');
   const done = () => {
     viewer.stop();

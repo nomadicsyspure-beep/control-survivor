@@ -154,6 +154,16 @@ export interface GameResult {
   stars: number;
 }
 
+/** 배열에서 조건에 안 맞는 것을 제자리에서 지운다 (매 프레임 새 배열을 만들지 않아 끊김이 적다) */
+function keep<T>(arr: T[], ok: (x: T) => boolean) {
+  let j = 0;
+  for (let i = 0; i < arr.length; i++) {
+    const x = arr[i];
+    if (ok(x)) arr[j++] = x;
+  }
+  arr.length = j;
+}
+
 export class Game {
   readonly canvas: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
@@ -200,6 +210,12 @@ export class Game {
   private camX = 0;
   private camY = 0;
   private hurtFlash = 0;
+  private safeTop = 0;
+  /** 겹침 밀어내기용 격자 (매 프레임 다시 쓴다) */
+  private readonly grid = new Map<number, Enemy[]>();
+  private safeBottom = 0;
+  /** 성능 표시: 최근 프레임 간격(ms) 평균 */
+  private frameMs = 16;
   /** 화면 하얀 섬광 */
   private flashT = 0;
 
@@ -269,7 +285,8 @@ export class Game {
     this.canvas = document.createElement('canvas');
     this.canvas.className = 'game-canvas';
     host.append(this.canvas);
-    this.ctx = this.canvas.getContext('2d')!;
+    // 불투명 캔버스: 브라우저가 뒤 배경과 섞지 않아도 돼서 그리기가 가볍다
+    this.ctx = this.canvas.getContext('2d', { alpha: false, desynchronized: true })!;
     this.joy = new Joystick(host);
     this.joy.leftOnly = mode === 'two';
     this.joy.gestures = mode === 'gesture' || mode === 'dodge';
@@ -279,7 +296,12 @@ export class Game {
   }
 
   private resize = () => {
-    this.dpr = Math.min(2, window.devicePixelRatio || 1);
+    // 화면 해상도 배율 상한: 도트 그림이라 1.5배면 충분히 선명하다 (가볍게 모드는 1배)
+    this.dpr = Math.min(this.tuning.lite ? 1 : 1.5, window.devicePixelRatio || 1);
+    // 안전 영역(노치)은 크기가 바뀔 때만 읽는다 (매 프레임 getComputedStyle은 비싸다)
+    const cs = getComputedStyle(document.documentElement);
+    this.safeTop = Number.parseFloat(cs.getPropertyValue('--sat')) || 0;
+    this.safeBottom = Number.parseFloat(cs.getPropertyValue('--sab')) || 0;
     this.w = window.innerWidth;
     this.h = window.innerHeight;
     this.canvas.width = Math.round(this.w * this.dpr);
@@ -298,6 +320,7 @@ export class Game {
     this.last = performance.now();
     const loop = (t: number) => {
       const real = Math.min(0.05, (t - this.last) / 1000);
+      this.frameMs += ((t - this.last) - this.frameMs) * 0.05;
       this.last = t;
       if (!this.paused) this.update(real);
       this.draw();
@@ -393,7 +416,7 @@ export class Game {
     if (this.hitT <= 0) this.hits = 0;
 
     for (const g of this.ghosts) g.life -= dt;
-    this.ghosts = this.ghosts.filter((g) => g.life > 0);
+    keep(this.ghosts, (g) => g.life > 0);
     if (!this.domainOn) this.domain = Math.max(0, this.domain - 600 * dt);
     this.updatePlayer(dt);
     this.updateEnemies(dt);
@@ -1363,11 +1386,27 @@ export class Game {
       }
     }
     // 서로 겹치지 않게
+    // 격자(칸 48)에 나눠 담고 같은 칸·옆 칸끼리만 본다 (몹이 많아도 가볍게)
     const list = this.enemies.filter((e) => !e.dead);
-    for (let i = 0; i < list.length; i++) {
-      for (let j = i + 1; j < list.length; j++) {
-        const a = list[i];
-        const b = list[j];
+    const CELL_SZ = 48;
+    const grid = this.grid;
+    for (const b of grid.values()) b.length = 0;
+    if (grid.size > 4000) grid.clear();
+    const keyOf = (cx: number, cy: number) => cx * 73856093 + cy * 19349663;
+    for (const e of list) {
+      const k = keyOf(Math.floor(e.x / CELL_SZ), Math.floor(e.y / CELL_SZ));
+      const b = grid.get(k);
+      if (b) b.push(e);
+      else grid.set(k, [e]);
+    }
+    for (const a of list) {
+      const cx = Math.floor(a.x / CELL_SZ);
+      const cy = Math.floor(a.y / CELL_SZ);
+      for (let gx = cx - 1; gx <= cx + 1; gx++) for (let gy = cy - 1; gy <= cy + 1; gy++) {
+        const bucket = grid.get(keyOf(gx, gy));
+        if (!bucket) continue;
+        for (const b of bucket) {
+        if (b === a || b.x < a.x || (b.x === a.x && b.y <= a.y)) continue;
         const dx = b.x - a.x;
         const dy = b.y - a.y;
         const d = Math.hypot(dx, dy);
@@ -1381,9 +1420,10 @@ export class Game {
           b.x += dx * push * wb;
           b.y += dy * push * wb;
         }
+        }
       }
     }
-    this.enemies = this.enemies.filter((e) => !e.dead);
+    keep(this.enemies, (e) => !e.dead);
   }
 
   private mobSkill(e: Enemy, ux: number, uy: number) {
@@ -1470,7 +1510,7 @@ export class Game {
         this.hurtPlayer(b.dmg, b.x - b.vx, b.y - b.vy);
       }
     }
-    this.bullets = this.bullets.filter((b) => b.life > 0);
+    keep(this.bullets, (b) => b.life > 0);
     for (const o of this.orbs) {
       o.x += o.vx * dt;
       o.y += o.vy * dt;
@@ -1487,7 +1527,7 @@ export class Game {
         // 꿰뚫고 계속 날아간다 (지나가는 적 모두)
       }
     }
-    this.orbs = this.orbs.filter((o) => o.life > 0);
+    keep(this.orbs, (o) => o.life > 0);
   }
 
   private updateFx(dt: number) {
@@ -1498,22 +1538,24 @@ export class Game {
       q.x += q.vx * dt;
       q.y += q.vy * dt;
     }
-    this.parts = this.parts.filter((q) => q.life > 0);
+    keep(this.parts, (q) => q.life > 0);
     for (const t of this.texts) {
       t.life -= dt;
       t.y -= 30 * dt;
     }
-    this.texts = this.texts.filter((t) => t.life > 0);
+    keep(this.texts, (t) => t.life > 0);
+    if (this.texts.length > 40) this.texts.splice(0, this.texts.length - 40);
     for (const s of this.sprs) s.life -= dt;
-    this.sprs = this.sprs.filter((s) => s.life > 0);
+    keep(this.sprs, (s) => s.life > 0);
+    if (this.sprs.length > 60) this.sprs.splice(0, this.sprs.length - 60);
     for (const r of this.rings) r.life -= dt;
-    this.rings = this.rings.filter((r) => r.life > 0);
+    keep(this.rings, (r) => r.life > 0);
     for (const l of this.lanes) l.t -= dt;
-    this.lanes = this.lanes.filter((l) => l.t > 0);
+    keep(this.lanes, (l) => l.t > 0);
   }
 
   private part(x: number, y: number, vx: number, vy: number, life: number, color: string, size: number, grav: number) {
-    if (this.parts.length > 400) return;
+    if (this.parts.length > (this.tuning.lite ? 150 : 300)) return;
     this.parts.push({ x, y, vx, vy, life, max: life, color, size, grav });
   }
 
@@ -1556,21 +1598,34 @@ export class Game {
     ctx.lineCap = 'butt';
 
     // 그림자
+    // 그림자는 한 번에 모아서 한 번만 칠한다
     ctx.fillStyle = 'rgba(0,0,0,0.25)';
-    for (const e of this.enemies) {
-      ctx.beginPath();
-      ctx.ellipse(e.x, e.y + e.r * 0.2, e.r * 1.1, e.r * 0.42, 0, 0, Math.PI * 2);
-      ctx.fill();
-    }
     ctx.beginPath();
+    for (const e of this.enemies) {
+      if (Math.abs(e.x - this.camX) > this.w / s / 2 + 60 || Math.abs(e.y - this.camY) > this.h / s / 2 + 80) continue;
+      ctx.moveTo(e.x + e.r * 1.1, e.y + e.r * 0.2);
+      ctx.ellipse(e.x, e.y + e.r * 0.2, e.r * 1.1, e.r * 0.42, 0, 0, Math.PI * 2);
+    }
+    ctx.moveTo(this.p.x + 16, this.p.y);
     ctx.ellipse(this.p.x, this.p.y, 16, 6, 0, 0, Math.PI * 2);
     ctx.fill();
 
     // 몹과 주인공을 아래쪽이 앞에 오게
-    const drawList: { y: number; f: () => void }[] = this.enemies.map((e) => ({ y: e.y, f: () => this.drawEnemy(e) }));
-    drawList.push({ y: this.p.y, f: () => this.drawHero() });
-    drawList.sort((a, b) => a.y - b.y);
-    for (const d of drawList) d.f();
+    // 화면 밖 몹은 안 그린다 (도파민 모드는 화면 바로 밖에서 몰려와서 꽤 많다)
+    const vw = this.w / s / 2 + 60;
+    const vh = this.h / s / 2 + 80;
+    const inView = (x: number, y: number) => Math.abs(x - this.camX) < vw && Math.abs(y - this.camY) < vh;
+    // 몹은 제자리에서 y 순서로 정렬하고, 주인공은 자기 y 차례에 끼워 그린다 (새 배열·함수를 만들지 않는다)
+    this.enemies.sort((a, b) => a.y - b.y);
+    let heroDone = false;
+    for (const e of this.enemies) {
+      if (!heroDone && e.y > this.p.y) {
+        this.drawHero();
+        heroDone = true;
+      }
+      if (inView(e.x, e.y)) this.drawEnemy(e);
+    }
+    if (!heroDone) this.drawHero();
 
     // 탄
     for (const b of this.bullets) {
@@ -2037,8 +2092,14 @@ export class Game {
 
   private drawHud() {
     const ctx = this.ctx;
+    if (this.tuning.showFps) {
+      ctx.textAlign = 'left';
+      ctx.font = '800 11px system-ui, sans-serif';
+      ctx.fillStyle = this.frameMs > 20 ? '#ff6b6b' : '#7cf2a0';
+      ctx.fillText(`${Math.round(1000 / this.frameMs)} FPS · 몹 ${this.enemies.length} · 이펙트 ${this.parts.length + this.sprs.length}`, 12, this.h - 10 - this.safeBottom);
+    }
     const p = this.p;
-    const top = 12 + (Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sat')) || 0);
+    const top = 12 + this.safeTop;
     // 체력
     ctx.fillStyle = 'rgba(0,0,0,0.5)';
     ctx.fillRect(12, top, 164, 16);
@@ -2083,7 +2144,7 @@ export class Game {
       const list = HUD_SKILLS[this.mode === 'gesture' ? 'gesture' : 'one'];
       const n = list.length;
       const gap = 52;
-      const by = this.h - 34 - (Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sab')) || 0);
+      const by = this.h - 34 - this.safeBottom;
       list.forEach((id, i) => {
         const x = this.w / 2 + (i - (n - 1) / 2) * gap;
         const r = id === 'ult' ? 21 : 18;
