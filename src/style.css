@@ -453,3 +453,23 @@ button {
     linear-gradient(to top, rgba(0, 0, 0, 0.6) calc(var(--cd, 0) * 100%), transparent 0),
     rgba(214, 64, 46, 0.8);
 }
+
+/* 자동 이동 켜고 끄기 (모든 모드, 오른쪽 위 버튼 아래) */
+.auto-move-btn {
+  position: absolute;
+  top: calc(58px + var(--sat));
+  right: 12px;
+  z-index: 2;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  background: rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.auto-move-btn.on {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(80, 60, 0, 0.55);
+}
