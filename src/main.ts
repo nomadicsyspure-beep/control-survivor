@@ -47,6 +47,12 @@ function showTitle() {
   const grow = el('button', 'btn big', '💪 성장');
   grow.append(el('small', '', '골드로 공격력·체력 · 별로 스킬 강화'));
   grow.addEventListener('click', () => showGrowth(() => (purse.textContent = `🪙 ${save.gold}   ⭐ ${save.stars}`)));
+  const stress = el('div', 'viewer-acts');
+  for (const n of [300, 500, 1000]) {
+    const b = el('button', 'chip', `🧪 ${n}마리`);
+    b.addEventListener('click', () => startGame('dodge', 'horde', 0, n));
+    stress.append(b);
+  }
   const set = el('button', 'btn', '⚙️ 설정');
   set.addEventListener('click', () => openSettings(tuning, () => {}));
   box.append(
@@ -56,6 +62,8 @@ function showTitle() {
     chal,
     grow,
     set,
+    el('div', 'section-title', '렉 테스트 (무적 · 몹 수 고정 · 보상 없음)'),
+    stress,
     el('p', 'build', `빌드 ${new Date(__BUILD_TIME__).toLocaleString('ko-KR')}`),
   );
   root.append(box);
@@ -168,13 +176,15 @@ function showGrowth(onChange: () => void) {
   document.body.append(overlay);
 }
 
-function startGame(mode: PlayMode, run: RunKind, diff: number) {
+let lastStress = 0;
+function startGame(mode: PlayMode, run: RunKind, diff: number, stress = 0) {
+  lastStress = stress;
   lastControl = mode;
   lastRun = run;
   lastDiff = diff;
   root.className = 'game-root';
   root.replaceChildren();
-  game = new Game(root, { control: mode, run, diff, save }, tuning, showResult);
+  game = new Game(root, { control: mode, run, diff, save, stress }, tuning, showResult);
   // 콘솔·테스트용
   (window as unknown as { cs: Game }).cs = game;
   const g = game;
@@ -287,7 +297,7 @@ function showResult(r: GameResult) {
   const home = el('button', 'btn', '처음으로');
   again.addEventListener('click', () => {
     overlay.remove();
-    startGame(lastControl, lastRun, lastDiff);
+    startGame(lastControl, lastRun, lastDiff, lastStress);
   });
   home.addEventListener('click', () => {
     overlay.remove();

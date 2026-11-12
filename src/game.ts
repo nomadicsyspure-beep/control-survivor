@@ -21,6 +21,8 @@ export interface GameOpts {
   /** 도전 모드 난이도 0 보통 · 1 어려움 · 2 지옥 */
   diff: number;
   save: Save;
+  /** 렉 테스트: 몹을 이 수만큼 계속 채운다 (무적·시간 제한 없음·보상 없음) */
+  stress?: number;
 }
 /** 도파민 모드 길이(초) · 몹 최대 수 */
 const HORDE_SEC = 180;
@@ -317,6 +319,7 @@ export class Game {
   readonly mode: PlayMode;
   readonly run: RunKind;
   readonly diff: number;
+  readonly stress: number;
   private readonly save: Save;
   /** 이번 판에 번 골드·별 */
   private gold = 0;
@@ -330,6 +333,7 @@ export class Game {
     this.autoMoveOn = opts.control === 'pilot' || this.tuning.autoMove;
     this.run = opts.run;
     this.diff = opts.diff;
+    this.stress = opts.stress ?? 0;
     this.save = opts.save;
     const mode = this.mode;
     this.p.maxHp = this.p.hp = Math.round(100 * hpMul(this.save));
@@ -499,6 +503,15 @@ export class Game {
 
   /** 도파민 모드: 몹이 끊임없이 몰려온다 (점점 많이), 20초마다 골렘. 3분 버티면 끝 */
   private updateHorde(dt: number) {
+    if (this.stress) {
+      // 렉 테스트: 몹 수를 꽉 채워 유지, 주인공은 무적, 끝나지 않는다
+      this.p.invuln = Math.max(this.p.invuln, 1);
+      this.p.hp = this.p.maxHp;
+      this.gold = 0;
+      for (let i = 0; this.enemies.length < this.stress && i < 60; i++) this.spawn(Math.random() < 0.35 ? 'bat' : 'slime');
+      this.wave = 1;
+      return;
+    }
     const rate = 9 + this.time * 0.18;
     this.spawnAcc += rate * dt;
     while (this.spawnAcc >= 1) {
@@ -2424,7 +2437,8 @@ export class Game {
     ctx.fillText(`HP ${Math.max(0, Math.ceil(p.hp))}`, 18, top + 12);
     if (this.run === 'horde') {
       const left = Math.max(0, Math.ceil(HORDE_SEC - this.time));
-      ctx.fillText(`도파민 · 남은 ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')} · 처치 ${this.kills}`, 12, top + 32);
+      if (this.stress) ctx.fillText(`🧪 렉 테스트 ${this.stress}마리 · 지금 ${this.enemies.length} · 처치 ${this.kills}`, 12, top + 32);
+      else ctx.fillText(`도파민 · 남은 ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')} · 처치 ${this.kills}`, 12, top + 32);
     } else {
       const ctrl = this.mode === 'two' ? ' · 두 손' : this.mode === 'gesture' ? ' · 제스처' : this.mode === 'pilot' ? ' · 자동 이동' : this.mode === 'dodge' ? ' · 휙 회피' : ' · 자동';
       ctx.fillText(`도전 ${DIFFS[this.diff].name} · WAVE ${this.wave} · 처치 ${this.kills}${ctrl}`, 12, top + 32);
